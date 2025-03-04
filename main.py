@@ -13,14 +13,30 @@ import logging
 import sys
 import datetime
 
+class ToggleableRichHandler(RichHandler):
+    """可切换显示的 RichHandler"""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.enabled = False
+
+    def emit(self, record):
+        if self.enabled:
+            super().emit(record)
+
 # 配置日志
+show_logs = False  # 控制日志显示
 log_file = f"mlx-cli-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+rich_handler = ToggleableRichHandler(
+    rich_tracebacks=True,
+    show_time=False,
+    show_path=False
+)
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="[%X]",
     handlers=[
-        RichHandler(rich_tracebacks=True),
+        rich_handler,
         logging.FileHandler(log_file)
     ]
 )
@@ -74,9 +90,10 @@ def show_menu():
     console.print("[4] 模型合并")
     console.print("[5] 模型评估")
     console.print("[6] 模型对话")
+    console.print(f"[7] {'隐藏' if show_logs else '显示'}日志")
     console.print("[0] 退出程序")
     
-    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3", "4", "5", "6"])
+    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3", "4", "5", "6", "7"])
     return choice
 
 def check_model_exists(model_dir: str) -> bool:
@@ -348,6 +365,7 @@ def main(ctx: typer.Context):
         show_header()
         check_environment()
         
+        global show_logs, rich_handler
         while True:
             choice = show_menu()
             
@@ -366,6 +384,10 @@ def main(ctx: typer.Context):
                 evaluate_model()
             elif choice == 6:
                 chat_with_model()
+            elif choice == 7:
+                show_logs = not show_logs
+                rich_handler.enabled = show_logs
+                console.print(f"[green]已{'隐藏' if not show_logs else '显示'}日志[/green]")
 
 if __name__ == "__main__":
     app() 
