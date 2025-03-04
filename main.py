@@ -773,10 +773,10 @@ class MLXDataConverter:
     CONTEXT_FIELDS = ["context", "input", "metadata", "example", "evidence", "schema"]  # 上下文
     OUTPUT_FIELDS = ["answer", "response", "output", "result", "solution", "completion"]  # 输出
 
-    def __init__(self, input_data: Any, target_format: str = None):
+    def __init__(self, input_data: Any, target_format: str = None, system_message: str = None):
         self.input_data = input_data
         self.target_format = target_format
-        # 添加格式特定的前缀配置
+        self.system_message = system_message
         self.format_prefixes = {
             "chat": {
                 "context": "",
@@ -811,12 +811,10 @@ class MLXDataConverter:
         messages = []
         
         if isinstance(self.input_data, dict):
-            # 获取输入和输出内容
             input_text = next((self.input_data[f] for f in self.INPUT_FIELDS if f in self.input_data), "")
             context_text = next((self.input_data[f] for f in self.CONTEXT_FIELDS if f in self.input_data), "")
             completion = next((self.input_data[f] for f in self.OUTPUT_FIELDS if f in self.input_data), "")
             
-            # 构造完整的prompt
             full_prompt = ""
             prefixes = self._get_prefixes()
             if context_text:
@@ -833,10 +831,10 @@ class MLXDataConverter:
             messages = [{"role": "user", "content": str(self.input_data)}]
             
         # 添加system message
-        if not any(msg.get("role") == "system" for msg in messages):
+        if self.system_message is not None:
             messages.insert(0, {
                 "role": "system",
-                "content": "You are a helpful assistant."
+                "content": self.system_message
             })
             
         return {"messages": messages}
@@ -844,17 +842,19 @@ class MLXDataConverter:
     def convert_to_completions(self) -> Dict[str, str]:
         """转换为completions格式"""
         if isinstance(self.input_data, dict):
-            # 提取字段
             input_text = next((self.input_data[f] for f in self.INPUT_FIELDS if f in self.input_data), "")
             context_text = next((self.input_data[f] for f in self.CONTEXT_FIELDS if f in self.input_data), "")
             output_text = next((self.input_data[f] for f in self.OUTPUT_FIELDS if f in self.input_data), "")
             
-            # 构造prompt
             full_prompt = ""
             if context_text:
                 full_prompt += f"{context_text}\n\n"
             if input_text:
                 full_prompt += input_text
+            
+            # 添加system message到prompt开头
+            if self.system_message:
+                full_prompt = f"{self.system_message}\n{full_prompt}"
             
             return {"prompt": full_prompt.strip(), "completion": output_text}
         return {"prompt": str(self.input_data), "completion": ""}
@@ -949,6 +949,14 @@ def convert_dataset():
     }
     target_format = format_map[format_choice]
     
+    # 如果选择了completions或chat格式，请求system message
+    system_message = None
+    if target_format in ["completions", "chat"]:
+        console.print("\n[bold]请输入系统提示词：[/bold]")
+        system_message = Prompt.ask("系统提示词", show_default=False)
+        if not system_message.strip():
+            system_message = None
+    
     # 根据选择的格式设置目标目录名称
     format_prefix = target_format.capitalize()
     target_dir = os.path.join(BASE_DATASET_DIR, f"MLX_{format_prefix}_{selected_dataset}")
@@ -1005,7 +1013,7 @@ def convert_dataset():
                  open(target_file, 'w', encoding='utf-8') as f_out:
                 for line in f_in:
                     data = json.loads(line.strip())
-                    converter = MLXDataConverter(data, target_format)
+                    converter = MLXDataConverter(data, target_format, system_message)
                     converted_data = converter.convert()
                     f_out.write(json.dumps(converted_data, ensure_ascii=False) + '\n')
             
