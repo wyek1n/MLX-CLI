@@ -178,9 +178,10 @@ def prepare_data():
     console.print("[1] 数据集下载")
     console.print("[2] 数据集预览")
     console.print("[3] 数据集转换")
+    console.print("[4] 数据集分割")
     console.print("[0] 返回主菜单")
     
-    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3"])
+    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3", "4"])
     
     if choice == 0:
         return
@@ -190,6 +191,8 @@ def prepare_data():
         preview_dataset()
     elif choice == 3:
         convert_dataset()
+    elif choice == 4:
+        split_dataset()
 
 def fine_tune():
     """模型微调功能"""
@@ -1024,6 +1027,152 @@ def convert_dataset():
     
     console.print(f"\n[green]数据集已转换为 {format_prefix} 格式![/green]")
     console.print(f"[green]转换后的数据集保存在: {target_dir}[/green]")
+
+def split_dataset():
+    """数据集分割功能"""
+    console.print("\n[bold cyan]数据集分割[/bold cyan]")
+    
+    # 检查数据集目录
+    datasets = []
+    try:
+        for item in os.listdir(BASE_DATASET_DIR):
+            if (os.path.isdir(os.path.join(BASE_DATASET_DIR, item)) 
+                and item.startswith('MLX_')):  # 只显示MLX_开头的数据集
+                datasets.append(item)
+    except FileNotFoundError:
+        console.print("[red]错误: 未找到数据集目录[/red]")
+        return
+    
+    if not datasets:
+        console.print("[yellow]未找到任何可用的转换后数据集，请先进行数据集转换[/yellow]")
+        return
+    
+    # 显示可用数据集列表
+    console.print("\n[bold]可用数据集列表:[/bold]")
+    for i, dataset in enumerate(datasets, 1):
+        console.print(f"[{i}] {dataset}")
+    
+    # 选择数据集
+    try:
+        dataset_choice = int(Prompt.ask(
+            "请选择数据集",
+            choices=[str(i) for i in range(1, len(datasets) + 1)]
+        ))
+    except ValueError:
+        console.print("[red]无效的选择[/red]")
+        return
+
+    selected_dataset = datasets[dataset_choice - 1]
+    dataset_dir = os.path.join(BASE_DATASET_DIR, selected_dataset)
+    
+    # 查找JSONL文件
+    jsonl_files = []
+    for root, _, files in os.walk(dataset_dir):
+        for file in files:
+            if file.endswith('.jsonl'):
+                jsonl_files.append(os.path.join(root, file))
+    
+    if not jsonl_files:
+        console.print("[red]错误: 未找到JSONL文件[/red]")
+        return
+    
+    # 读取数据
+    data = []
+    for file in jsonl_files:
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        data.append(json.loads(line.strip()))
+        except Exception as e:
+            console.print(f"[red]读取文件 {file} 时出错: {str(e)}[/red]")
+            return
+    
+    total_samples = len(data)
+    if total_samples == 0:
+        console.print("[red]错误: 数据集为空[/red]")
+        return
+    
+    # 询问随机抽取数量
+    console.print(f"\n[bold]数据集总样本数: {total_samples}[/bold]")
+    try:
+        sample_size = int(Prompt.ask(
+            "请输入需要随机抽取的样本数（直接回车使用全部数据）",
+            default=str(total_samples)
+        ))
+        if not 0 < sample_size <= total_samples:
+            raise ValueError("样本数超出范围")
+    except ValueError as e:
+        console.print(f"[red]无效的样本数: {str(e)}[/red]")
+        return
+    
+    # 询问训练集比例
+    try:
+        train_ratio = float(Prompt.ask(
+            "请输入训练集比例（0-1之间，默认0.9）",
+            default="0.9"
+        ))
+        if not 0 < train_ratio <= 1:
+            raise ValueError("比例必须在0-1之间")
+    except ValueError as e:
+        console.print(f"[red]无效的比例: {str(e)}[/red]")
+        return
+    
+    # 询问测试集比例
+    if train_ratio < 1:
+        try:
+            test_ratio = float(Prompt.ask(
+                "请输入测试集比例（0-1之间，默认0.5）",
+                default="0.5"
+            ))
+            if not 0 < test_ratio <= 1:
+                raise ValueError("比例必须在0-1之间")
+        except ValueError as e:
+            console.print(f"[red]无效的比例: {str(e)}[/red]")
+            return
+    
+    # 创建输出目录
+    output_dir = "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 随机抽样和分割
+    import random
+    random.shuffle(data)
+    selected_data = data[:sample_size]
+    
+    # 计算各集合的大小
+    train_size = int(sample_size * train_ratio)
+    if train_ratio < 1:
+        remaining_size = sample_size - train_size
+        test_size = int(remaining_size * test_ratio)
+        valid_size = remaining_size - test_size
+    else:
+        test_size = valid_size = 0
+    
+    # 分割数据
+    train_data = selected_data[:train_size]
+    if train_ratio < 1:
+        test_data = selected_data[train_size:train_size + test_size]
+        valid_data = selected_data[train_size + test_size:]
+    
+    # 保存数据
+    def save_jsonl(data, filename):
+        filepath = os.path.join(output_dir, filename)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            for item in data:
+                f.write(json.dumps(item, ensure_ascii=False) + '\n')
+        return filepath
+    
+    # 保存训练集
+    train_file = save_jsonl(train_data, 'train.jsonl')
+    console.print(f"\n[green]已保存训练集 ({len(train_data)} 条数据): {train_file}[/green]")
+    
+    # 保存测试集和验证集
+    if train_ratio < 1:
+        test_file = save_jsonl(test_data, 'test.jsonl')
+        valid_file = save_jsonl(valid_data, 'valid.jsonl')
+        console.print(f"[green]已保存测试集 ({len(test_data)} 条数据): {test_file}[/green]")
+        console.print(f"[green]已保存验证集 ({len(valid_data)} 条数据): {valid_file}[/green]")
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
