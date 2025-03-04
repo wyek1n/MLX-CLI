@@ -12,6 +12,9 @@ tokenizers>=0.15.0
 modelscope>=1.9.5
 huggingface_hub>=0.19.0
 
+# MLX LM
+mlx-lm>=0.21.5
+
 # Image Processing
 pillow>=10.0.0
 opencv-python>=4.8.0
