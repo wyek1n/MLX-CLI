@@ -13,10 +13,7 @@ import logging
 import sys
 import datetime
 from time import sleep
-from dotenv import load_dotenv
 
-# 加载环境变量
-load_dotenv()
 
 class ToggleableRichHandler(RichHandler):
     """可切换显示的 RichHandler"""
