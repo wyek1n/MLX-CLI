@@ -5,7 +5,7 @@ from rich.prompt import Prompt, IntPrompt
 from rich.progress import Progress, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
 from rich.logging import RichHandler
 from rich import print
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 import os
 import subprocess
 from enum import Enum
@@ -14,10 +14,14 @@ import sys
 import datetime
 from time import sleep
 from dotenv import load_dotenv
+import json
 
 # 加载环境变量
 load_dotenv()
 
+# 创建logs目录
+LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(LOGS_DIR, exist_ok=True)
 
 class ToggleableRichHandler(RichHandler):
     """可切换显示的 RichHandler"""
@@ -31,7 +35,7 @@ class ToggleableRichHandler(RichHandler):
 
 # 配置日志
 show_logs = False  # 控制日志显示
-log_file = f"mlx-cli-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+log_file = os.path.join(LOGS_DIR, f"mlx-cli-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log")
 rich_handler = ToggleableRichHandler(
     rich_tracebacks=True,
     show_time=False,
@@ -173,9 +177,10 @@ def prepare_data():
     console.print("\n请选择操作:")
     console.print("[1] 数据集下载")
     console.print("[2] 数据集预览")
+    console.print("[3] 数据集转换")
     console.print("[0] 返回主菜单")
     
-    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2"])
+    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3"])
     
     if choice == 0:
         return
@@ -183,6 +188,8 @@ def prepare_data():
         download_dataset()
     elif choice == 2:
         preview_dataset()
+    elif choice == 3:
+        convert_dataset()
 
 def fine_tune():
     """模型微调功能"""
@@ -525,6 +532,86 @@ def download_dataset_from_huggingface(dataset_name: str, max_retries: int = 3) -
                 for error in errors:
                     console.print(f"[red]{error}[/red]")
 
+def detect_file_format(file_path: str) -> str:
+    """检测文件格式
+    
+    Args:
+        file_path: 文件路径
+        
+    Returns:
+        str: 'json' 或 'jsonl'
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline().strip()
+            second_line = f.readline().strip()
+            
+            # 如果第二行存在且是有效的JSON，说明是JSONL格式
+            if second_line and json.loads(first_line) and json.loads(second_line):
+                return 'jsonl'
+            
+            # 重新打开文件尝试作为单个JSON读取
+            f.seek(0)
+            json.load(f)
+            return 'json'
+    except json.JSONDecodeError:
+        # 如果作为单个JSON读取失败，再次尝试按行读取
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip():
+                        json.loads(line.strip())
+                return 'jsonl'
+        except json.JSONDecodeError:
+            raise ValueError("无法识别文件格式")
+    except Exception as e:
+        raise ValueError(f"读取文件时出错: {str(e)}")
+
+def convert_to_jsonl(file_path: str) -> str:
+    """将JSON文件转换为JSONL格式
+    
+    Args:
+        file_path: 源文件路径
+        
+    Returns:
+        str: 转换后的JSONL文件路径
+    """
+    jsonl_path = file_path.rsplit('.', 1)[0] + '.jsonl'
+    
+    try:
+        # 首先检测文件格式
+        file_format = detect_file_format(file_path)
+        
+        # 如果已经是JSONL格式，只需要重命名
+        if file_format == 'jsonl':
+            if not file_path.endswith('.jsonl'):
+                os.rename(file_path, jsonl_path)
+                console.print(f"[green]已将 {os.path.basename(file_path)} 重命名为JSONL格式[/green]")
+            return jsonl_path
+        
+        # 如果是JSON格式，进行转换
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            
+        # 确保数据是列表
+        if not isinstance(data, list):
+            data = [data]
+            
+        # 写入JSONL文件
+        with open(jsonl_path, 'w', encoding='utf-8') as f:
+            for item in data:
+                f.write(json.dumps(item, ensure_ascii=False) + '\n')
+        
+        # 删除原文件
+        os.remove(file_path)
+        console.print(f"[green]已将 {os.path.basename(file_path)} 转换为JSONL格式[/green]")
+        return jsonl_path
+    except Exception as e:
+        console.print(f"[red]转换文件 {file_path} 时出错: {str(e)}[/red]")
+        if os.path.exists(jsonl_path) and jsonl_path != file_path:
+            os.remove(jsonl_path)  # 清理未完成的转换文件
+        return file_path  # 转换失败时返回原文件路径
+
 def preview_dataset():
     """数据集预览功能"""
     console.print("\n[bold cyan]数据集预览[/bold cyan]")
@@ -584,44 +671,37 @@ def preview_dataset():
     sorted_files = sorted(data_files, key=lambda x: file_sizes[x], reverse=True)
     largest_file = sorted_files[0]
     
+    # 如果最大文件不是JSONL格式，进行转换
+    if not largest_file.endswith('.jsonl'):
+        console.print("\n[yellow]检测到非JSONL格式文件，正在转换...[/yellow]")
+        largest_file = convert_to_jsonl(largest_file)
+        # 更新文件大小信息
+        file_sizes[largest_file] = os.path.getsize(largest_file)
+    
     # 显示文件信息
     console.print("\n[bold]找到以下数据文件:[/bold]")
     for file in sorted_files:
-        size_mb = file_sizes[file] / (1024 * 1024)
-        is_largest = file == largest_file
-        console.print(
-            f"{'[green]→[/green] ' if is_largest else '  '}"
-            f"{os.path.basename(file)} "
-            f"({size_mb:.2f} MB)"
-            f"{' [yellow](将使用此文件)[/yellow]' if is_largest else ''}"
-        )
+        if file == largest_file or file.endswith('.jsonl'):  # 只显示JSONL文件
+            size_mb = file_sizes[file] / (1024 * 1024)
+            is_largest = file == largest_file
+            console.print(
+                f"{'[green]→[/green] ' if is_largest else '  '}"
+                f"{os.path.basename(file)} "
+                f"({size_mb:.2f} MB)"
+                f"{' [yellow](将使用此文件)[/yellow]' if is_largest else ''}"
+            )
     
     # 读取数据
-    import json
     data = []
     try:
-        # 先尝试按行读取
         with open(largest_file, 'r', encoding='utf-8') as f:
-            first_line = f.readline().strip()
-            # 检查第一行是否是有效的 JSON
-            json.loads(first_line)
-            # 如果是，重新打开文件按行读取
-            f.seek(0)
             for line in f:
                 line = line.strip()
                 if line:  # 跳过空行
                     data.append(json.loads(line))
-    except json.JSONDecodeError:
-        # 如果按行读取失败，尝试作为单个 JSON 文件读取
-        with open(largest_file, 'r', encoding='utf-8') as f:
-            file_data = json.load(f)
-            if isinstance(file_data, list):
-                data.extend(file_data)
-            else:
-                data.append(file_data)
     except Exception as e:
         console.print(f"[red]读取文件时出错: {str(e)}[/red]")
-        console.print("[yellow]提示: 请确保文件是有效的 JSON 或 JSONL 格式[/yellow]")
+        console.print("[yellow]提示: 请确保文件是有效的 JSONL 格式[/yellow]")
         return
     
     if not data:
@@ -685,6 +765,257 @@ def preview_dataset():
             current_page -= 1
         elif key == 'e' and current_page < total_pages - 1:
             current_page += 1
+
+class MLXDataConverter:
+    """MLX数据集转换器"""
+    # 定义字段映射
+    INPUT_FIELDS = ["question", "query", "instruction", "prompt", "task"]  # 主输入
+    CONTEXT_FIELDS = ["context", "input", "metadata", "example", "evidence", "schema"]  # 上下文
+    OUTPUT_FIELDS = ["answer", "response", "output", "result", "solution", "completion"]  # 输出
+
+    def __init__(self, input_data: Any, target_format: str = None):
+        self.input_data = input_data
+        self.target_format = target_format
+        # 添加格式特定的前缀配置
+        self.format_prefixes = {
+            "chat": {
+                "context": "",
+                "input": ""
+            },
+            "completions": {
+                "context": "",
+                "input": ""
+            },
+            "text": {
+                "context": "",
+                "input": ""
+            }
+        }
+
+    def detect_format(self) -> str:
+        """自动检测输入数据特征并推断目标格式"""
+        if isinstance(self.input_data, list) and all("role" in item for item in self.input_data):
+            return "chat"
+        elif isinstance(self.input_data, dict):
+            if any(f in self.input_data for f in self.INPUT_FIELDS):
+                return "completions"
+        return "text"
+
+    def _get_prefixes(self) -> Dict[str, str]:
+        """获取当前格式的前缀配置"""
+        format_to_use = self.target_format or self.detect_format()
+        return self.format_prefixes.get(format_to_use, {"context": "", "input": ""})
+
+    def convert_to_chat(self) -> Dict[str, list]:
+        """转换为chat格式"""
+        messages = []
+        
+        if isinstance(self.input_data, dict):
+            # 获取输入和输出内容
+            input_text = next((self.input_data[f] for f in self.INPUT_FIELDS if f in self.input_data), "")
+            context_text = next((self.input_data[f] for f in self.CONTEXT_FIELDS if f in self.input_data), "")
+            completion = next((self.input_data[f] for f in self.OUTPUT_FIELDS if f in self.input_data), "")
+            
+            # 构造完整的prompt
+            full_prompt = ""
+            prefixes = self._get_prefixes()
+            if context_text:
+                full_prompt += f"{prefixes['context']}{context_text}\n\n"
+            if input_text:
+                full_prompt += f"{prefixes['input']}{input_text}"
+            
+            if full_prompt:
+                messages = [
+                    {"role": "user", "content": full_prompt.strip()},
+                    {"role": "assistant", "content": completion}
+                ]
+        else:
+            messages = [{"role": "user", "content": str(self.input_data)}]
+            
+        # 添加system message
+        if not any(msg.get("role") == "system" for msg in messages):
+            messages.insert(0, {
+                "role": "system",
+                "content": "You are a helpful assistant."
+            })
+            
+        return {"messages": messages}
+
+    def convert_to_completions(self) -> Dict[str, str]:
+        """转换为completions格式"""
+        if isinstance(self.input_data, dict):
+            # 提取字段
+            input_text = next((self.input_data[f] for f in self.INPUT_FIELDS if f in self.input_data), "")
+            context_text = next((self.input_data[f] for f in self.CONTEXT_FIELDS if f in self.input_data), "")
+            output_text = next((self.input_data[f] for f in self.OUTPUT_FIELDS if f in self.input_data), "")
+            
+            # 构造prompt
+            full_prompt = ""
+            if context_text:
+                full_prompt += f"{context_text}\n\n"
+            if input_text:
+                full_prompt += input_text
+            
+            return {"prompt": full_prompt.strip(), "completion": output_text}
+        return {"prompt": str(self.input_data), "completion": ""}
+
+    def convert_to_text(self) -> Dict[str, str]:
+        """转换为text格式"""
+        if isinstance(self.input_data, dict):
+            # 提取字段
+            input_text = next((self.input_data[f] for f in self.INPUT_FIELDS if f in self.input_data), "")
+            context_text = next((self.input_data[f] for f in self.CONTEXT_FIELDS if f in self.input_data), "")
+            output_text = next((self.input_data[f] for f in self.OUTPUT_FIELDS if f in self.input_data), "")
+            
+            # 构造完整文本
+            text = ""
+            if context_text:
+                text += f"{context_text}\n\n"
+            if input_text:
+                text += f"{input_text}\n\n"
+            text += output_text
+        else:
+            text = str(self.input_data)
+        return {"text": text}
+
+    def convert(self) -> Dict[str, Any]:
+        """主转换函数"""
+        format_to_use = self.target_format or self.detect_format()
+        if format_to_use == "chat":
+            return self.convert_to_chat()
+        elif format_to_use == "completions":
+            return self.convert_to_completions()
+        else:
+            return self.convert_to_text()
+
+def convert_dataset():
+    """数据集转换功能"""
+    console.print("\n[bold cyan]数据集转换[/bold cyan]")
+    
+    # 检查数据集目录
+    datasets = []
+    try:
+        for item in os.listdir(BASE_DATASET_DIR):
+            if (os.path.isdir(os.path.join(BASE_DATASET_DIR, item)) 
+                and not item.startswith('MLX_') 
+                and not item.startswith('.')):  # 过滤掉隐藏目录
+                datasets.append(item)
+    except FileNotFoundError:
+        console.print("[red]错误: 未找到数据集目录[/red]")
+        return
+    
+    if not datasets:
+        console.print("[yellow]未找到任何可用数据集，请先下载数据集[/yellow]")
+        return
+    
+    # 显示可用数据集列表
+    console.print("\n[bold]可用数据集列表:[/bold]")
+    for i, dataset in enumerate(datasets, 1):
+        console.print(f"[{i}] {dataset}")
+    
+    # 选择数据集
+    try:
+        dataset_choice = int(Prompt.ask(
+            "请选择数据集",
+            choices=[str(i) for i in range(1, len(datasets) + 1)]
+        ))
+    except ValueError:
+        console.print("[red]无效的选择[/red]")
+        return
+
+    selected_dataset = datasets[dataset_choice - 1]
+    source_dir = os.path.join(BASE_DATASET_DIR, selected_dataset)
+    
+    # 选择目标格式
+    console.print("\n[bold]请选择转换格式:[/bold]")
+    console.print("[1] Completions 格式")
+    console.print("[2] Chat 格式")
+    console.print("[3] Text 格式")
+    
+    try:
+        format_choice = int(Prompt.ask(
+            "请选择格式",
+            choices=["1", "2", "3"]
+        ))
+    except ValueError:
+        console.print("[red]无效的选择[/red]")
+        return
+    
+    # 映射选择到格式
+    format_map = {
+        1: "completions",
+        2: "chat",
+        3: "text"
+    }
+    target_format = format_map[format_choice]
+    
+    # 根据选择的格式设置目标目录名称
+    format_prefix = target_format.capitalize()
+    target_dir = os.path.join(BASE_DATASET_DIR, f"MLX_{format_prefix}_{selected_dataset}")
+    
+    # 查找所有 JSON/JSONL 文件
+    data_files = []
+    file_sizes = {}
+    for root, _, files in os.walk(source_dir):
+        for file in files:
+            if file.endswith(('.json', '.jsonl')):
+                file_path = os.path.join(root, file)
+                try:
+                    file_size = os.path.getsize(file_path)
+                    data_files.append(file_path)
+                    file_sizes[file_path] = file_size
+                except OSError as e:
+                    console.print(f"[yellow]警告: 无法获取文件大小 {file}: {str(e)}[/yellow]")
+    
+    if not data_files:
+        console.print("[red]错误: 未找到数据文件[/red]")
+        return
+    
+    # 按文件大小排序
+    sorted_files = sorted(data_files, key=lambda x: file_sizes[x], reverse=True)
+    
+    # 转换所有非JSONL文件
+    jsonl_files = []
+    for file_path in sorted_files:
+        if not file_path.endswith('.jsonl'):
+            console.print(f"\n[yellow]正在将 {os.path.basename(file_path)} 转换为JSONL格式...[/yellow]")
+            try:
+                jsonl_path = convert_to_jsonl(file_path)
+                jsonl_files.append(jsonl_path)
+            except Exception as e:
+                console.print(f"[red]转换失败: {str(e)}[/red]")
+                continue
+        else:
+            jsonl_files.append(file_path)
+    
+    if not jsonl_files:
+        console.print("[red]错误: 没有可用的JSONL文件[/red]")
+        return
+    
+    # 创建目标目录
+    os.makedirs(target_dir, exist_ok=True)
+    
+    # 转换数据集
+    for source_file in jsonl_files:
+        target_file = os.path.join(target_dir, os.path.basename(source_file))
+        console.print(f"\n[yellow]正在转换: {os.path.basename(source_file)} -> {format_prefix} 格式[/yellow]")
+        
+        try:
+            with open(source_file, 'r', encoding='utf-8') as f_in, \
+                 open(target_file, 'w', encoding='utf-8') as f_out:
+                for line in f_in:
+                    data = json.loads(line.strip())
+                    converter = MLXDataConverter(data, target_format)
+                    converted_data = converter.convert()
+                    f_out.write(json.dumps(converted_data, ensure_ascii=False) + '\n')
+            
+            console.print(f"[green]✓ 已转换并保存到: {target_file}[/green]")
+        except Exception as e:
+            console.print(f"[red]转换失败: {str(e)}[/red]")
+            continue
+    
+    console.print(f"\n[green]数据集已转换为 {format_prefix} 格式![/green]")
+    console.print(f"[green]转换后的数据集保存在: {target_dir}[/green]")
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
