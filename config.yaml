@@ -1,0 +1,10 @@
+# 模型微调配置
+model: Qwen/Qwen2.5-0.5B-Instruct  # 模型路径
+fine_tune_type: lora               # 微调类型：lora, dora, full
+num_layers: 16                     # 微调层数，-1表示全部层
+batch_size: 1                      # 批次大小
+iters: 1000                        # 训练迭代次数
+learning_rate: 0.001              # 学习率
+steps_per_report: 10              # 损失报告间隔
+adapter_path: /Users/wyek1n/Downloads/MLX/adapter/Qwen2.5-0.5B-Instruct  # 微调权重保存路径
+resume_adapter_file: null          # 恢复训练的权重文件路径 

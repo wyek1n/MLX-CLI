@@ -31,5 +31,6 @@ pydantic>=2.0.0
 python-dotenv>=1.0.0
 
 # Optional Dependencies
-wandb>=0.15.0  # 用于实验追踪
+wandb>=0.16.0  # 用于训练过程记录和可视化
+PyYAML>=6.0.1  # 用于配置文件解析
 pytest>=7.0.0  # 用于测试 

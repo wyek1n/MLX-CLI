@@ -22,7 +22,6 @@ from threading import Thread
 from queue import Queue
 import signal
 from contextlib import contextmanager
-import re
 
 # 加载环境变量
 load_dotenv()
@@ -201,6 +200,307 @@ def prepare_data():
         convert_dataset()
     elif choice == 4:
         split_dataset()
+
+def fine_tune():
+    """模型微调功能"""
+    console.print("\n[bold cyan]模型微调[/bold cyan]")
+    
+    # 检查 wandb API key
+    wandb_api_key = os.getenv("WANDB_API_KEY")
+    if not wandb_api_key:
+        console.print("[yellow]警告: 未找到WANDB_API_KEY，将不会记录训练过程[/yellow]")
+        return
+    
+    try:
+        # 收集所有训练参数
+        params = collect_training_params()
+        if not params:
+            return
+            
+        # 初始化 wandb
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"{params['model'].split('/')[-1]}_{timestamp}"
+        
+        wandb.init(
+            project="mlx-finetune",
+            name=run_name,
+            config=params
+        )
+        
+        # 定义要追踪的指标
+        wandb.define_metric("train/global_step", summary="max")
+        wandb.define_metric("train/epoch", summary="max")
+        wandb.define_metric("train/loss", summary="min")
+        wandb.define_metric("train/grad_norm", summary="mean")
+        wandb.define_metric("train/learning_rate", summary="last")
+        
+        console.print(f"[green]wandb run 初始化成功: {run_name}[/green]")
+        
+        # 构建训练命令
+        cmd = build_training_command(params)
+        
+        # 显示命令预览
+        console.print("\n[bold]将执行以下命令:[/bold]")
+        console.print(" ".join(cmd))
+        
+        # 确认执行
+        if not Prompt.ask("\n是否开始训练?", choices=["y", "n"], default="y").lower() == "y":
+            console.print("[yellow]已取消训练[/yellow]")
+            return
+        
+        # 执行训练
+        run_training(cmd)
+        
+    except Exception as e:
+        console.print(f"[red]训练过程出错: {str(e)}[/red]")
+    finally:
+        if wandb.run is not None:
+            wandb.finish()
+
+def collect_training_params():
+    """收集训练参数"""
+    params = {}
+    try:
+        # 选择模型
+        models = []
+        try:
+            for item in os.listdir(BASE_MODEL_DIR):
+                if os.path.isdir(os.path.join(BASE_MODEL_DIR, item)):
+                    models.append(item)
+        except FileNotFoundError:
+            console.print("[red]错误: 未找到模型目录[/red]")
+            return None
+        
+        if not models:
+            console.print("[yellow]未找到任何可用模型，请先下载模型[/yellow]")
+            return None
+        
+        console.print("\n[bold]可用模型列表:[/bold]")
+        for i, model in enumerate(models, 1):
+            console.print(f"[{i}] {model}")
+        
+        try:
+            model_choice = int(Prompt.ask(
+                "请选择模型",
+                choices=[str(i) for i in range(1, len(models) + 1)]
+            ))
+            selected_model = models[model_choice - 1]
+            params["model"] = os.path.join(BASE_MODEL_DIR, selected_model)
+            
+            # 根据选择的模型设置adapter保存路径
+            adapter_base_dir = "/Users/wyek1n/Downloads/MLX/adapter"
+            adapter_model_dir = os.path.join(adapter_base_dir, selected_model)
+            os.makedirs(adapter_model_dir, exist_ok=True)
+            params["adapter_path"] = adapter_model_dir
+            
+            # 如果需要恢复训练，使用模型特定的权重文件路径
+            if Prompt.ask(
+                "\n是否需要恢复之前的训练?",
+                choices=["y", "n"],
+                default="n"
+            ).lower() == "y":
+                params["resume_adapter_file"] = os.path.join(adapter_model_dir, "adapter_weights.safetensors")
+            
+            # 选择微调类型
+            console.print("\n[bold]请选择微调类型:[/bold]")
+            console.print("[1] LoRA (默认)")
+            console.print("[2] DoRA")
+            console.print("[3] Full")
+            
+            fine_tune_types = {1: "lora", 2: "dora", 3: "full"}
+            type_choice = int(Prompt.ask("请选择", choices=["1", "2", "3"], default="1"))
+            params["fine_tune_type"] = fine_tune_types[type_choice]
+            
+            # 设置其他参数
+            params["num_layers"] = int(Prompt.ask(
+                "请输入微调层数 (-1表示全部层)",
+                default="16"
+            ))
+            
+            params["batch_size"] = int(Prompt.ask(
+                "请输入批次大小",
+                default="1"
+            ))
+            
+            params["iters"] = int(Prompt.ask(
+                "请输入训练迭代次数",
+                default="1000"
+            ))
+            
+            params["learning_rate"] = float(Prompt.ask(
+                "请输入学习率",
+                default="0.001"
+            ))
+            
+            params["steps_per_report"] = int(Prompt.ask(
+                "请输入损失报告间隔步数",
+                default="10"
+            ))
+            
+            return params
+        except ValueError:
+            console.print("[red]无效的选择[/red]")
+            return None
+    except Exception as e:
+        console.print(f"[red]参数收集出错: {str(e)}[/red]")
+        return None
+
+def build_training_command(params):
+    """构建训练命令"""
+    cmd = ["mlx_lm.lora", "--train"]
+    for k, v in params.items():
+        if v is not None:
+            cmd.extend([f"--{k.replace('_', '-')}", str(v)])
+    cmd.extend(["--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"])
+    return cmd
+
+@contextmanager
+def handle_training_interrupt():
+    """处理训练过程中的中断信号"""
+    original_handlers = {}
+    training_process = None
+    
+    def handle_signal(signum, frame):
+        if training_process:
+            console.print("\n[yellow]正在终止训练进程...[/yellow]")
+            training_process.terminate()
+            training_process.wait()
+        # 恢复原始信号处理器
+        for sig, handler in original_handlers.items():
+            signal.signal(sig, handler)
+        raise KeyboardInterrupt
+    
+    try:
+        # 保存原始信号处理器
+        original_handlers = {
+            signal.SIGINT: signal.getsignal(signal.SIGINT),
+            signal.SIGTSTP: signal.getsignal(signal.SIGTSTP)
+        }
+        # 设置新的信号处理器
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTSTP, handle_signal)
+        yield lambda p: setattr(sys.modules[__name__], 'training_process', p)
+    finally:
+        # 恢复原始信号处理器
+        for sig, handler in original_handlers.items():
+            signal.signal(sig, handler)
+
+def run_training(cmd):
+    """执行训练过程"""
+    try:
+        with handle_training_interrupt() as set_process:
+            env = os.environ.copy()
+            env["WANDB_CONSOLE"] = "off"
+            
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                env=env,
+                bufsize=1,
+                text=True
+            )
+            set_process(process)
+            
+            metrics_queue = Queue()
+            
+            def process_metrics(queue):
+                while True:
+                    metrics = queue.get()
+                    if metrics is None:
+                        break
+                    try:
+                        wandb.log(metrics)
+                    except Exception as e:
+                        log.warning(f"wandb记录出错: {str(e)}")
+            
+            # 启动指标处理线程
+            metrics_thread = Thread(target=process_metrics, daemon=True, args=(metrics_queue,))
+            metrics_thread.start()
+
+            # 实时读取并处理输出
+            while process.poll() is None:
+                stdout_line = process.stdout.readline()
+                stderr_line = process.stderr.readline()
+                
+                for line in (stdout_line, stderr_line):
+                    if line:
+                        line = line.strip()
+                        # 直接打印到控制台
+                        print(line, flush=True)
+                        # 解析并记录指标
+                        metrics = parse_training_output(line)
+                        if metrics:
+                            metrics_queue.put(metrics)
+            
+            # 处理剩余输出
+            stdout, stderr = process.communicate()
+            for line in (stdout.splitlines() + stderr.splitlines()):
+                if line.strip():
+                    print(line.strip(), flush=True)
+                    metrics = parse_training_output(line.strip())
+                    if metrics:
+                        metrics_queue.put(metrics)
+            
+            # 停止指标处理线程
+            metrics_queue.put(None)
+            metrics_thread.join()
+            
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+                
+    except KeyboardInterrupt:
+        console.print("\n[yellow]训练已被用户中断[/yellow]")
+        if wandb.run is not None:
+            wandb.finish()
+    except Exception as e:
+        raise Exception(f"训练进程出错: {str(e)}")
+
+def parse_training_output(output: str) -> dict:
+    """解析训练输出并提取关键信息"""
+    try:
+        console.print(f"[yellow]正在解析训练输出: {output}[/yellow]")  # 打印原始输出
+        # MLX-LM 的输出格式示例：
+        # Training: iter = 10/1000: loss = 2.5, grad_norm = 0.1, lr = 0.001
+        metrics = {}
+        
+        if "Training:" in output and "loss" in output:
+            # 去除 "Training:" 前缀
+            output = output.split("Training:")[-1].strip()
+            
+            # 提取步数/迭代次数
+            if "iter =" in output:
+                iter_part = output.split("iter =")[1].split(":")[0].strip()
+            else:
+                iter_part = output.split("step =")[1].split(":")[0].strip()
+            
+            current_iter = int(iter_part.split("/")[0])
+            total_iters = int(iter_part.split("/")[1])
+            
+            # 提取训练指标
+            metrics_part = output.split(":")[-1].strip()
+            for metric in metrics_part.split(","):
+                if "=" in metric:
+                    key, value = [x.strip() for x in metric.split("=")]
+                    try:
+                        value = float(value)
+                        if key == "lr":
+                            key = "learning_rate"
+                        metrics[f"train/{key}"] = value
+                    except ValueError:
+                        continue
+            
+            # 添加步数和 epoch 信息
+            metrics["train/global_step"] = current_iter
+            metrics["train/epoch"] = current_iter / total_iters
+            
+            console.print(f"[green]成功解析指标: {metrics}[/green]")  # 打印解析结果
+            return metrics
+    except Exception as e:
+        console.print(f"[red]解析训练输出时出错: {str(e)}[/red]")
+    console.print("[yellow]未能解析指标[/yellow]")
+    return {}
 
 def merge_model():
     """模型合并功能"""
@@ -1176,154 +1476,12 @@ def split_dataset():
         console.print(f"[green]已保存测试集 ({len(test_data)} 条数据): {test_file}[/green]")
         console.print(f"[green]已保存验证集 ({len(valid_data)} 条数据): {valid_file}[/green]")
 
-def fine_tune():
-    """模型微调功能"""
-    console.print("\n[bold cyan]模型微调[/bold cyan]")
-    
-    # 检查模型目录
-    models = []
-    try:
-        for item in os.listdir(BASE_MODEL_DIR):
-            if os.path.isdir(os.path.join(BASE_MODEL_DIR, item)):
-                if not item.startswith('.'):  # 过滤掉隐藏目录
-                    models.append(item)
-    except FileNotFoundError:
-        console.print("[red]错误: 未找到模型目录[/red]")
-        return
-    
-    if not models:
-        console.print("[yellow]未找到任何可用模型，请先下载模型[/yellow]")
-        return
-    
-    # 显示可用模型列表
-    console.print("\n[bold]可用模型列表:[/bold]")
-    for i, model in enumerate(models, 1):
-        console.print(f"[{i}] {model}")
-    
-    # 选择模型
-    try:
-        model_choice = int(Prompt.ask(
-            "请选择模型",
-            choices=[str(i) for i in range(1, len(models) + 1)]
-        ))
-    except ValueError:
-        console.print("[red]无效的选择[/red]")
-        return
-
-    selected_model = models[model_choice - 1]
-    model_path = os.path.join(BASE_MODEL_DIR, selected_model)
-    
-    # 创建 adapter 权重保存目录
-    adapter_path = os.path.join("/Users/wyek1n/Downloads/MLX/adapter", selected_model)
-    os.makedirs(adapter_path, exist_ok=True)
-    
-    # 设置训练参数
-    params = {
-        "batch_size": IntPrompt.ask("请输入批次大小", default=1),
-        "num_layers": IntPrompt.ask("请输入微调层数", default=4),
-        "iters": IntPrompt.ask("请输入训练迭代次数", default=1000)
-    }
-    
-    # 构建训练命令
-    cmd = [
-        "python", "-m",
-        "mlx_lm.lora",
-        "--train",
-        "--model", model_path,
-        "--adapter-path", adapter_path,  # 添加 adapter 权重保存路径
-        "--batch-size", str(params["batch_size"]),
-        "--num-layers", str(params["num_layers"]),
-        "--iters", str(params["iters"]),
-        "--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
-    ]
-    
-    # 显示命令预览
-    console.print("\n[bold]将执行以下命令:[/bold]")
-    console.print(" ".join(cmd))
-    
-    # 确认执行
-    if not Prompt.ask("\n是否开始训练?", choices=["y", "n"], default="y").lower() == "y":
-        console.print("[yellow]已取消训练[/yellow]")
-        return
-    
-    # 执行训练
-    try:
-        # 创建新的进程组
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # 合并标准错误到标准输出
-            universal_newlines=True,
-            bufsize=1,
-            preexec_fn=os.setsid,  # 在新的进程组中运行
-            env=os.environ.copy()  # 使用当前环境变量
-        )
-        
-        def handle_signal(signum, frame):
-            """处理中断信号"""
-            if process.poll() is None:  # 如果进程还在运行
-                try:
-                    # 终止整个进程组
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                    process.wait(timeout=5)  # 等待进程结束
-                except:
-                    # 如果进程没有及时结束，强制终止
-                    try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                    except:
-                        pass
-            raise KeyboardInterrupt
-        
-        # 设置信号处理器
-        original_sigint = signal.getsignal(signal.SIGINT)
-        original_sigtstp = signal.getsignal(signal.SIGTSTP)
-        signal.signal(signal.SIGINT, handle_signal)
-        signal.signal(signal.SIGTSTP, handle_signal)
-        
-        try:
-            # 实时显示输出
-            while process.poll() is None:  # 当进程还在运行时
-                line = process.stdout.readline()
-                if line:
-                    print(line.strip(), flush=True)
-            
-            # 读取剩余输出
-            remaining_output = process.stdout.read()
-            if remaining_output:
-                print(remaining_output.strip(), flush=True)
-            
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, cmd)
-                
-        finally:
-            # 恢复原始信号处理器
-            signal.signal(signal.SIGINT, original_sigint)
-            signal.signal(signal.SIGTSTP, original_sigtstp)
-            
-            # 确保进程被终止
-            if process.poll() is None:
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                    process.wait(timeout=5)
-                except:
-                    try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                    except:
-                        pass
-            
-    except KeyboardInterrupt:
-        console.print("\n[yellow]训练已被用户中断[/yellow]")
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]训练进程出错: {str(e)}[/red]")
-    except Exception as e:
-        console.print(f"[red]执行出错: {str(e)}[/red]")
-
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
     """MLX CLI 主程序"""
     if ctx.invoked_subcommand is None:
         show_header()
-        check_env_vars()
+        check_env_vars()  # 添加环境变量检查
         check_environment()
         
         global show_logs, rich_handler
