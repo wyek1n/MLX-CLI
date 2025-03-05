@@ -13,7 +13,7 @@ modelscope>=1.9.5
 huggingface_hub>=0.19.0
 
 # MLX LM
-mlx-lm>=0.21.5
+mlx-lm>=0.0.3
 
 # Image Processing
 pillow>=10.0.0
@@ -24,13 +24,16 @@ librosa>=0.10.0
 soundfile>=0.12.1
 
 # CLI & Utils
-rich>=13.0.0
+rich>=10.0.0
 typer>=0.9.0
 tqdm>=4.66.0
 pydantic>=2.0.0
-python-dotenv>=1.0.0
+python-dotenv>=0.19.0
 
 # Optional Dependencies
 wandb>=0.16.0  # 用于训练过程记录和可视化
 PyYAML>=6.0.1  # 用于配置文件解析
-pytest>=7.0.0  # 用于测试 
+pytest>=7.0.0  # 用于测试
+pandas>=2.0.0  # 用于处理 wandb history 数据
+requests>=2.31.0  # 用于发送 Telegram 消息
+matplotlib>=3.0.0  # 用于生成训练图表 

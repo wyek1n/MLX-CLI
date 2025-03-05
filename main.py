@@ -17,12 +17,16 @@ import json
 import yaml
 from pathlib import Path
 import wandb
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread
 from queue import Queue
 import signal
 from contextlib import contextmanager
 import re
+import requests
+import time
+import math
+import matplotlib.pyplot as plt
 
 # 加载环境变量
 load_dotenv()
@@ -86,17 +90,23 @@ def check_env_vars():
         "BASE_MODEL_DIR": BASE_MODEL_DIR,
         "BASE_DATASET_DIR": BASE_DATASET_DIR,
         "MODELSCOPE_TOKEN": MODELSCOPE_TOKEN,
-        "HUGGINGFACE_TOKEN": HUGGINGFACE_TOKEN
+        "HUGGINGFACE_TOKEN": HUGGINGFACE_TOKEN,
+        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+        "TELEGRAM_BOT_TOKEN": os.getenv("TELEGRAM_BOT_TOKEN"),
+        "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID")
     }
     
     missing_vars = [var for var, value in required_vars.items() if not value]
     
     if missing_vars:
-        console.print("[red]错误: 缺少必要的环境变量:[/red]")
+        console.print("[yellow]警告: 以下环境变量未设置:[/yellow]")
         for var in missing_vars:
-            console.print(f"[red]- {var}[/red]")
-        console.print("[yellow]请确保 .env 文件存在并包含所有必要的环境变量[/yellow]")
-        raise typer.Exit(1)
+            console.print(f"[yellow]- {var}[/yellow]")
+        if any(var in ["BASE_MODEL_DIR", "BASE_DATASET_DIR"] for var in missing_vars):
+            console.print("[red]错误: 基础目录配置缺失[/red]")
+            raise typer.Exit(1)
+        else:
+            console.print("[yellow]部分功能可能受限[/yellow]")
 
 def show_header():
     """显示欢迎信息"""
@@ -1176,8 +1186,105 @@ def split_dataset():
         console.print(f"[green]已保存测试集 ({len(test_data)} 条数据): {test_file}[/green]")
         console.print(f"[green]已保存验证集 ({len(valid_data)} 条数据): {valid_file}[/green]")
 
+def load_config(config_path: str) -> dict:
+    """加载配置文件"""
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+            
+        # 设置默认值
+        defaults = {
+            "train": True,
+            "seed": 0,
+            "num_layers": 32,
+            "batch_size": 1,
+            "iters": 100,
+            "val_batches": 25,
+            "learning_rate": 1e-6,
+            "steps_per_report": 10,
+            "steps_per_eval": 200,
+            "resume_adapter_file": None,
+            "save_every": 1000,
+            "test": False,
+            "test_batches": 100,
+            "max_seq_length": 8192,
+            "grad_checkpoint": True,
+            "fine_tune_type": "lora"
+        }
+        
+        # 更新默认值
+        for key, value in defaults.items():
+            if key not in config:
+                config[key] = value
+                
+        return config
+    except Exception as e:
+        console.print(f"[red]加载配置文件失败: {str(e)}[/red]")
+        return None
+
+def get_model_layers(model_path: str) -> int:
+    """获取模型的实际层数"""
+    try:
+        from mlx_lm import load
+        model, _ = load(model_path)
+        return len(model.layers)
+    except Exception as e:
+        console.print(f"[yellow]警告: 无法获取模型层数: {str(e)}，将使用默认值[/yellow]")
+        return 24  # Qwen2.5-0.5B 的默认层数
+
+def send_telegram_message(message: str, photo_path: str = None):
+    """发送 Telegram 消息"""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    
+    if not bot_token or not chat_id:
+        console.print("[yellow]警告: 未找到 Telegram 配置，将不会发送通知[/yellow]")
+        return
+    
+    try:
+        # 发送文本消息
+        text_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        response = requests.post(text_url, json={
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML"  # 启用 HTML 格式
+        })
+        response.raise_for_status()
+        
+        # 如果有图片，发送图片
+        if photo_path:
+            photo_url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+            with open(photo_path, 'rb') as photo:
+                response = requests.post(photo_url, data={
+                    "chat_id": chat_id
+                }, files={
+                    "photo": photo
+                })
+                response.raise_for_status()
+                
+    except Exception as e:
+        console.print(f"[yellow]发送 Telegram 通知失败: {str(e)}[/yellow]")
+
+def format_time_duration(seconds: int) -> str:
+    """格式化时间间隔"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours}小时")
+    if minutes > 0:
+        parts.append(f"{minutes}分钟")
+    if seconds > 0 or not parts:
+        parts.append(f"{seconds}秒")
+    
+    return "".join(parts)
+
 def fine_tune():
     """模型微调功能"""
+    start_time = time.time()
+    
     console.print("\n[bold cyan]模型微调[/bold cyan]")
     
     # 检查 wandb API key
@@ -1185,12 +1292,12 @@ def fine_tune():
     if not wandb_api_key:
         console.print("[yellow]警告: 未找到WANDB_API_KEY，将不会记录训练过程[/yellow]")
     
-    # 检查模型目录
+    # 检查并选择模型
     models = []
     try:
         for item in os.listdir(BASE_MODEL_DIR):
             if os.path.isdir(os.path.join(BASE_MODEL_DIR, item)):
-                if not item.startswith('.'):  # 过滤掉隐藏目录
+                if not item.startswith('.'):
                     models.append(item)
     except FileNotFoundError:
         console.print("[red]错误: 未找到模型目录[/red]")
@@ -1218,64 +1325,110 @@ def fine_tune():
     selected_model = models[model_choice - 1]
     model_path = os.path.join(BASE_MODEL_DIR, selected_model)
     
+    # 获取模型实际层数
+    model_layers = get_model_layers(model_path)
+    console.print(f"[cyan]模型层数: {model_layers}[/cyan]")
+    
     # 创建 adapter 权重保存目录
     adapter_path = os.path.join("/Users/wyek1n/Downloads/MLX/adapter", selected_model)
     os.makedirs(adapter_path, exist_ok=True)
     
-    # 设置训练参数
-    params = {
-        "batch_size": IntPrompt.ask("请输入批次大小", default=1),
-        "num_layers": IntPrompt.ask("请输入微调层数", default=4),
-        "iters": IntPrompt.ask("请输入训练迭代次数", default=1000),
-        "learning_rate": float(Prompt.ask("请输入学习率", default="0.001"))
-    }
+    # 询问是否使用配置文件
+    use_config = Prompt.ask("是否使用配置文件?", choices=["y", "n"], default="n").lower() == "y"
     
-    # 初始化 wandb（如果有API key）
-    if wandb_api_key:
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            run_name = f"{selected_model}_{timestamp}"
+    if use_config:
+        config_path = "config.yaml"
+        if not os.path.exists(config_path):
+            console.print("[yellow]配置文件不存在，将创建默认配置文件[/yellow]")
+            # 创建默认配置文件，使用选择的模型路径
+            default_config = {
+                "model": model_path,
+                "train": True,
+                "seed": 0,
+                "num_layers": model_layers,  # 使用实际的层数
+                "batch_size": 1,
+                "iters": 100,
+                "val_batches": 25,
+                "learning_rate": 1e-6,
+                "steps_per_report": 10,
+                "steps_per_eval": 200,
+                "resume_adapter_file": None,
+                "save_every": 1000,
+                "test": False,
+                "test_batches": 100,
+                "max_seq_length": 8192,
+                "grad_checkpoint": True,
+                "fine_tune_type": "lora",
+                "adapter_path": adapter_path,  # 添加 adapter 保存路径
+                "data_path": "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"  # 添加数据集路径
+            }
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(default_config, f, allow_unicode=True)
+            console.print("[green]已创建配置文件，请根据需要修改配置后重新运行[/green]")
+            return
+        else:
+            # 加载现有配置文件并更新模型和数据集路径
+            config = load_config(config_path)
+            if not config:
+                return
             
-            wandb.init(
-                project="mlx-finetune",
-                name=run_name,
-                config={
-                    "model": selected_model,
-                    "batch_size": params["batch_size"],
-                    "num_layers": params["num_layers"],
-                    "iters": params["iters"],
-                    "learning_rate": params["learning_rate"]
-                }
-            )
+            # 更新配置
+            config["model"] = model_path
+            config["adapter_path"] = adapter_path
+            config["data_path"] = "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
             
-            # 定义要追踪的指标
-            wandb.define_metric("train/global_step", summary="max")
-            wandb.define_metric("train/epoch", summary="max")
-            wandb.define_metric("train/loss", summary="min")
-            wandb.define_metric("train/learning_rate", summary="last")
-            wandb.define_metric("performance/iterations_per_second", summary="mean")
-            wandb.define_metric("performance/tokens_per_second", summary="mean")
-            wandb.define_metric("performance/total_tokens", summary="max")
-            wandb.define_metric("performance/peak_memory_gb", summary="max")
+            # 保存更新后的配置
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, allow_unicode=True)
             
-            console.print(f"[green]wandb run 初始化成功: {run_name}[/green]")
-        except Exception as e:
-            console.print(f"[yellow]wandb 初始化失败: {str(e)}，将不会记录训练过程[/yellow]")
-            wandb_api_key = None
+            console.print("[green]已更新配置文件[/green]")
+            params = config
+    else:
+        # 交互式设置参数
+        params = {
+            "batch_size": IntPrompt.ask("请输入批次大小", default=1),
+            "num_layers": IntPrompt.ask(
+                "请输入微调层数",
+                default=model_layers,
+                show_choices=False,
+                show_default=True
+            ),
+            "iters": IntPrompt.ask("请输入训练迭代次数", default=100),
+            "learning_rate": float(Prompt.ask("请输入学习率", default="1e-6")),
+            "val_batches": IntPrompt.ask("请输入验证批次数", default=25),
+            "steps_per_eval": IntPrompt.ask("请输入验证间隔步数", default=200),
+            "save_every": IntPrompt.ask("请输入保存间隔步数", default=1000),
+            "max_seq_length": IntPrompt.ask("请输入最大序列长度", default=8192),
+            "fine_tune_type": Prompt.ask("请选择微调类型", choices=["lora", "dora", "full"], default="lora"),
+            "grad_checkpoint": Prompt.ask("是否使用梯度检查点?", choices=["y", "n"], default="y").lower() == "y"
+        }
+        
+        # 验证层数
+        if params["num_layers"] > model_layers:
+            console.print(f"[yellow]警告: 设置的层数 ({params['num_layers']}) 超过模型实际层数 ({model_layers})，将使用实际层数[/yellow]")
+            params["num_layers"] = model_layers
     
-    # 构建训练命令
+    # 构建训练命令（移到这里）
     cmd = [
         "python", "-m",
         "mlx_lm.lora",
         "--train",
         "--model", model_path,
         "--adapter-path", adapter_path,
-        "--batch-size", str(params["batch_size"]),
+        "--fine-tune-type", params["fine_tune_type"],
         "--num-layers", str(params["num_layers"]),
+        "--batch-size", str(params["batch_size"]),
         "--iters", str(params["iters"]),
+        "--val-batches", str(params["val_batches"]),
         "--learning-rate", str(params["learning_rate"]),
+        "--steps-per-eval", str(params["steps_per_eval"]),
+        "--save-every", str(params["save_every"]),
+        "--max-seq-length", str(params["max_seq_length"]),
         "--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
     ]
+    
+    if params["grad_checkpoint"]:
+        cmd.append("--grad-checkpoint")
     
     # 显示命令预览
     console.print("\n[bold]将执行以下命令:[/bold]")
@@ -1286,9 +1439,61 @@ def fine_tune():
         console.print("[yellow]已取消训练[/yellow]")
         return
     
-    # 执行训练
+    # 发送开始训练通知（移到这里）
+    start_message = (
+        f"🚀 <b>模型微调开始</b>\n\n"
+        f"<b>基本信息:</b>\n"
+        f"模型: {selected_model}\n"
+        f"数据集: MLX-CLI/lora/data\n\n"
+        f"<b>训练参数:</b>\n"
+        f"批次大小: {params['batch_size']}\n"
+        f"微调层数: {params['num_layers']}\n"
+        f"训练迭代: {params['iters']}\n"
+        f"学习率: {params['learning_rate']}\n"
+        f"微调类型: {params['fine_tune_type']}\n"
+        f"验证批次: {params['val_batches']}\n"
+        f"验证间隔: {params['steps_per_eval']}\n"
+        f"保存间隔: {params['save_every']}\n"
+        f"最大长度: {params['max_seq_length']}\n"
+        f"梯度检查点: {'是' if params['grad_checkpoint'] else '否'}"
+    )
+    send_telegram_message(start_message)
+    
     try:
-        # 创建新的进程组
+        # 初始化 wandb（如果有API key）
+        if wandb_api_key:
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                run_name = f"{selected_model}_{timestamp}"
+                
+                wandb.init(
+                    project="mlx-finetune",
+                    name=run_name,
+                    config={
+                        "model": selected_model,
+                        "batch_size": params["batch_size"],
+                        "num_layers": params["num_layers"],
+                        "iters": params["iters"],
+                        "learning_rate": params["learning_rate"]
+                    }
+                )
+                
+                # 定义要追踪的指标
+                wandb.define_metric("train/global_step", summary="max")
+                wandb.define_metric("train/epoch", summary="max")
+                wandb.define_metric("train/loss", summary="min")
+                wandb.define_metric("train/learning_rate", summary="last")
+                wandb.define_metric("performance/iterations_per_second", summary="mean")
+                wandb.define_metric("performance/tokens_per_second", summary="mean")
+                wandb.define_metric("performance/total_tokens", summary="max")
+                wandb.define_metric("performance/peak_memory_gb", summary="max")
+                
+                console.print(f"[green]wandb run 初始化成功: {run_name}[/green]")
+            except Exception as e:
+                console.print(f"[yellow]wandb 初始化失败: {str(e)}，将不会记录训练过程[/yellow]")
+                wandb_api_key = None
+        
+        # 执行训练
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1406,12 +1611,88 @@ def fine_tune():
                         pass
             
     except KeyboardInterrupt:
+        end_message = "❌ <b>训练已被用户中断</b>"
+        send_telegram_message(end_message)
         console.print("\n[yellow]训练已被用户中断[/yellow]")
     except subprocess.CalledProcessError as e:
+        end_message = f"❌ <b>训练进程出错</b>\n\n错误信息: {str(e)}"
+        send_telegram_message(end_message)
         console.print(f"[red]训练进程出错: {str(e)}[/red]")
     except Exception as e:
+        end_message = f"❌ <b>执行出错</b>\n\n错误信息: {str(e)}"
+        send_telegram_message(end_message)
         console.print(f"[red]执行出错: {str(e)}[/red]")
     finally:
+        # 计算训练时间
+        end_time = time.time()
+        duration = format_time_duration(int(end_time - start_time))
+        
+        if process.returncode == 0:
+            # 获取 wandb 运行的 URL
+            wandb_url = wandb.run.get_url() if wandb.run else "未使用 wandb"
+            
+            # 获取最终的训练指标
+            final_metrics = {}
+            try:
+                if wandb.run:
+                    history = wandb.run.history()
+                    final_metrics = {
+                        "loss": history["train/loss"].iloc[-1],
+                        "perplexity": math.exp(history["train/loss"].iloc[-1]),
+                        "total_tokens": history["performance/total_tokens"].iloc[-1],
+                        "tokens_per_second": history["performance/tokens_per_second"].mean(),
+                        "peak_memory": history["performance/peak_memory_gb"].max()
+                    }
+                    
+                    # 生成并保存 loss 图表
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(history["train/loss"].values)
+                    plt.title("Training Loss")
+                    plt.xlabel("Iteration")
+                    plt.ylabel("Loss")
+                    plt.grid(True)
+                    loss_plot_path = "loss_plot.png"
+                    plt.savefig(loss_plot_path)
+                    plt.close()
+            except Exception as e:
+                log.error(f"获取训练指标失败: {str(e)}")
+                final_metrics = {}
+            
+            # 发送完成通知
+            end_message = (
+                f"✅ <b>模型微调完成</b>\n\n"
+                f"<b>基本信息:</b>\n"
+                f"模型: {selected_model}\n"
+                f"数据集: MLX-CLI/lora/data\n"
+                f"训练时长: {duration}\n"
+                f"Wandb 地址: {wandb_url}\n\n"
+            )
+            
+            if final_metrics:
+                end_message += (
+                    f"<b>训练结果:</b>\n"
+                    f"最终损失: {final_metrics['loss']:.4f}\n"
+                    f"困惑度: {final_metrics['perplexity']:.4f}\n"
+                    f"总处理tokens: {final_metrics['total_tokens']:,}\n"
+                    f"平均速度: {final_metrics['tokens_per_second']:.2f} tokens/s\n"
+                    f"峰值内存: {final_metrics['peak_memory']:.2f} GB\n\n"
+                )
+            
+            end_message += (
+                f"<b>训练参数:</b>\n"
+                f"批次大小: {params['batch_size']}\n"
+                f"微调层数: {params['num_layers']}\n"
+                f"训练迭代: {params['iters']}\n"
+                f"学习率: {params['learning_rate']}\n"
+                f"微调类型: {params['fine_tune_type']}"
+            )
+            
+            # 发送文本消息和图片
+            send_telegram_message(end_message)
+            if os.path.exists("loss_plot.png"):
+                send_telegram_message("📈 训练损失曲线:", "loss_plot.png")
+                os.remove("loss_plot.png")  # 清理临时文件
+        
         # 确保关闭 wandb
         if wandb.run is not None:
             wandb.finish()
