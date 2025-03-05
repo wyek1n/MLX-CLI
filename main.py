@@ -115,7 +115,7 @@ def show_header():
     """显示欢迎信息"""
     console.print(Panel.fit(
         "[bold blue]欢迎使用 MLX CLI 工具[/bold blue]\n"
-        "版本: 0.1.0",
+        "版本: 0.1.1",
         title="MLX CLI",
         border_style="blue"
     ))
