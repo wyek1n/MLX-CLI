@@ -29,6 +29,7 @@ import math
 import matplotlib.pyplot as plt
 import pandas as pd
 import psutil
+import traceback
 
 # 加载环境变量
 load_dotenv()
@@ -1708,18 +1709,37 @@ def fine_tune():
                             
                             # 清理 mlx_lm.lora 相关进程
                             try:
-                                # 查找并终止所有 mlx_lm.lora 进程
+                                # 查找并终止所有 Python 相关进程
                                 for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                                     try:
-                                        if proc.info['cmdline'] and 'mlx_lm.lora' in ' '.join(proc.info['cmdline']):
-                                            log.debug(f"终止进程: {proc.info['pid']}")
-                                            psutil.Process(proc.info['pid']).terminate()
+                                        cmdline = ' '.join(proc.info['cmdline'] or [])
+                                        # 终止所有与训练相关的 Python 进程
+                                        if ('python' in proc.info['name'].lower() and 
+                                            ('mlx_lm.lora' in cmdline or 
+                                             'mlx-lm' in cmdline or 
+                                             'mlx_lm' in cmdline)):
+                                            log.debug(f"终止进程: {proc.info['pid']} ({cmdline})")
+                                            proc_obj = psutil.Process(proc.info['pid'])
+                                            # 终止子进程
+                                            children = proc_obj.children(recursive=True)
+                                            for child in children:
+                                                child.terminate()
+                                            # 终止主进程
+                                            proc_obj.terminate()
+                                            
+                                            # 等待进程结束
+                                            gone, alive = psutil.wait_procs([proc_obj] + children, timeout=3)
+                                            
+                                            # 强制结束未响应的进程
+                                            for p in alive:
+                                                p.kill()
                                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                                        pass
+                                        continue
                                 
                                 log.debug("已清理相关进程")
                             except Exception as e:
                                 log.error(f"清理进程时出错: {str(e)}")
+                                log.error(traceback.format_exc())
                         else:
                             log.error(f"图表文件未生成: {loss_plot_path}")
                     else:
