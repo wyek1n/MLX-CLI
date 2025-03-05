@@ -1645,6 +1645,7 @@ def fine_tune():
             # 获取最终的训练指标
             final_metrics = {}
             end_message = None  # 初始化 end_message
+            notification_sent = False  # 添加通知发送标志
             
             try:
                 if wandb.run:
@@ -1701,6 +1702,7 @@ def fine_tune():
                             log.debug(f"图表文件已生成: {loss_plot_path}")
                             send_telegram_message(end_message)  # 发送一次完整通知
                             send_telegram_message("", loss_plot_path)  # 发送图片
+                            notification_sent = True  # 标记通知已发送
                             os.remove(loss_plot_path)  # 清理临时文件
                         else:
                             log.error(f"图表文件未生成: {loss_plot_path}")
@@ -1728,7 +1730,7 @@ def fine_tune():
                 )
             
             # 如果还没有发送过通知，则在这里发送
-            if not os.path.exists(loss_plot_path):
+            if not notification_sent:
                 send_telegram_message(end_message)
         
         # 确保关闭 wandb
