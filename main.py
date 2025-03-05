@@ -27,6 +27,7 @@ import requests
 import time
 import math
 import matplotlib.pyplot as plt
+import pandas as pd
 
 # 加载环境变量
 load_dotenv()
@@ -1241,29 +1242,42 @@ def send_telegram_message(message: str, photo_path: str = None):
         console.print("[yellow]警告: 未找到 Telegram 配置，将不会发送通知[/yellow]")
         return
     
+    url = f"https://api.telegram.org/bot{bot_token}/"
+    
     try:
-        # 发送文本消息
-        text_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        response = requests.post(text_url, json={
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "HTML"  # 启用 HTML 格式
-        })
-        response.raise_for_status()
-        
-        # 如果有图片，发送图片
-        if photo_path:
-            photo_url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+        if photo_path and os.path.exists(photo_path):
+            # 发送图片
             with open(photo_path, 'rb') as photo:
-                response = requests.post(photo_url, data={
-                    "chat_id": chat_id
-                }, files={
-                    "photo": photo
-                })
-                response.raise_for_status()
-                
+                response = requests.post(
+                    url + "sendPhoto",
+                    data={
+                        "chat_id": chat_id,
+                        "caption": message,
+                        "parse_mode": "HTML"
+                    },
+                    files={"photo": photo}
+                )
+            if response.status_code != 200:
+                log.error(f"发送图片到 Telegram 失败: {response.text}")
+            else:
+                log.debug("成功发送图片到 Telegram")
+        else:
+            # 只发送文本消息
+            response = requests.post(
+                url + "sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML"
+                }
+            )
+            if response.status_code != 200:
+                log.error(f"发送消息到 Telegram 失败: {response.text}")
+            
+        response.raise_for_status()
     except Exception as e:
         console.print(f"[yellow]发送 Telegram 通知失败: {str(e)}[/yellow]")
+        log.error(f"发送 Telegram 通知失败: {str(e)}")
 
 def format_time_duration(seconds: int) -> str:
     """格式化时间间隔"""
@@ -1439,13 +1453,10 @@ def fine_tune():
         console.print("[yellow]已取消训练[/yellow]")
         return
     
-    # 发送开始训练通知（移到这里）
+    # 发送开始训练通知
     start_message = (
         f"🚀 <b>模型微调开始</b>\n\n"
-        f"<b>基本信息:</b>\n"
-        f"模型: {selected_model}\n"
-        f"数据集: MLX-CLI/lora/data\n\n"
-        f"<b>训练参数:</b>\n"
+        f"模型: {selected_model}\n\n"
         f"批次大小: {params['batch_size']}\n"
         f"微调层数: {params['num_layers']}\n"
         f"训练迭代: {params['iters']}\n"
@@ -1633,65 +1644,92 @@ def fine_tune():
             
             # 获取最终的训练指标
             final_metrics = {}
+            end_message = None  # 初始化 end_message
+            
             try:
                 if wandb.run:
-                    history = wandb.run.history()
-                    final_metrics = {
-                        "loss": history["train/loss"].iloc[-1],
-                        "perplexity": math.exp(history["train/loss"].iloc[-1]),
-                        "total_tokens": history["performance/total_tokens"].iloc[-1],
-                        "tokens_per_second": history["performance/tokens_per_second"].mean(),
-                        "peak_memory": history["performance/peak_memory_gb"].max()
-                    }
+                    # 获取训练历史
+                    api = wandb.Api()
+                    run = api.run(f"wyek1n-wye/mlx-finetune/{wandb.run.id}")
                     
-                    # 生成并保存 loss 图表
-                    plt.figure(figsize=(10, 6))
-                    plt.plot(history["train/loss"].values)
-                    plt.title("Training Loss")
-                    plt.xlabel("Iteration")
-                    plt.ylabel("Loss")
-                    plt.grid(True)
-                    loss_plot_path = "loss_plot.png"
-                    plt.savefig(loss_plot_path)
-                    plt.close()
+                    # 等待同步完成
+                    while not run.summary.get("_wandb", {}).get("runtime", 0):
+                        time.sleep(1)
+                    
+                    # 获取历史数据
+                    history = pd.DataFrame(run.scan_history())
+                    
+                    if len(history) > 0:  # 检查是否有历史数据
+                        final_metrics = {
+                            "loss": history["train/loss"].iloc[-1],
+                            "perplexity": math.exp(history["train/loss"].iloc[-1]),
+                            "total_tokens": history["performance/total_tokens"].iloc[-1],
+                            "tokens_per_second": history["performance/tokens_per_second"].mean(),
+                            "peak_memory": history["performance/peak_memory_gb"].max()
+                        }
+                        
+                        # 构建完成通知消息
+                        end_message = (
+                            f"✅ <b>模型微调完成</b>\n\n"
+                            f"模型: {selected_model}\n"
+                            f"训练时长: {duration}\n"
+                            f"最终损失: {final_metrics['loss']:.4f}\n"
+                            f"困惑度: {final_metrics['perplexity']:.4f}\n"
+                            f"总处理tokens: {final_metrics['total_tokens']:,}\n"
+                            f"平均速度: {final_metrics['tokens_per_second']:.2f} tokens/s\n"
+                            f"峰值内存: {final_metrics['peak_memory']:.2f} GB\n"
+                            f"Wandb 地址: {wandb_url}"
+                        )
+                        
+                        # 生成并保存 loss 图表
+                        plt.figure(figsize=(10, 6))
+                        plt.plot(history["train/loss"].values)
+                        plt.title("Training Loss")
+                        plt.xlabel("Iteration")
+                        plt.ylabel("Loss")
+                        plt.grid(True)
+                        
+                        script_dir = os.path.dirname(os.path.abspath(__file__))
+                        loss_plot_path = os.path.join(script_dir, "loss_plot.png")
+                        plt.savefig(loss_plot_path, bbox_inches='tight', dpi=300)
+                        plt.close()
+                        
+                        log.debug(f"成功生成训练图表: {loss_plot_path}")
+                        
+                        # 发送通知和图片
+                        if os.path.exists(loss_plot_path):
+                            log.debug(f"图表文件已生成: {loss_plot_path}")
+                            send_telegram_message(end_message)  # 发送一次完整通知
+                            send_telegram_message("", loss_plot_path)  # 发送图片
+                            os.remove(loss_plot_path)  # 清理临时文件
+                        else:
+                            log.error(f"图表文件未生成: {loss_plot_path}")
+                    else:
+                        log.warning("未找到训练历史数据")
+                        end_message = (
+                            f"✅ <b>模型微调完成</b>\n\n"
+                            f"模型: {selected_model}\n"
+                            f"训练时长: {duration}\n"
+                            f"Wandb 地址: {wandb_url}"
+                        )
+                    
+                    # 完成后再关闭 wandb
+                    wandb.finish()
             except Exception as e:
                 log.error(f"获取训练指标失败: {str(e)}")
+                import traceback
+                log.error(f"详细错误: {traceback.format_exc()}")
                 final_metrics = {}
-            
-            # 发送完成通知
-            end_message = (
-                f"✅ <b>模型微调完成</b>\n\n"
-                f"<b>基本信息:</b>\n"
-                f"模型: {selected_model}\n"
-                f"数据集: MLX-CLI/lora/data\n"
-                f"训练时长: {duration}\n"
-                f"Wandb 地址: {wandb_url}\n\n"
-            )
-            
-            if final_metrics:
-                end_message += (
-                    f"<b>训练结果:</b>\n"
-                    f"最终损失: {final_metrics['loss']:.4f}\n"
-                    f"困惑度: {final_metrics['perplexity']:.4f}\n"
-                    f"总处理tokens: {final_metrics['total_tokens']:,}\n"
-                    f"平均速度: {final_metrics['tokens_per_second']:.2f} tokens/s\n"
-                    f"峰值内存: {final_metrics['peak_memory']:.2f} GB\n\n"
+                end_message = (
+                    f"✅ <b>模型微调完成</b>\n\n"
+                    f"模型: {selected_model}\n"
+                    f"训练时长: {duration}\n"
+                    f"Wandb 地址: {wandb_url}"
                 )
             
-            end_message += (
-                f"<b>训练参数:</b>\n"
-                f"批次大小: {params['batch_size']}\n"
-                f"微调层数: {params['num_layers']}\n"
-                f"训练迭代: {params['iters']}\n"
-                f"学习率: {params['learning_rate']}\n"
-                f"微调类型: {params['fine_tune_type']}"
-            )
-            
-            # 发送文本消息和图片
-            send_telegram_message(end_message)
-            if os.path.exists("loss_plot.png"):
-                send_telegram_message("📈 训练损失曲线:", "loss_plot.png")
-                os.remove("loss_plot.png")  # 清理临时文件
+            # 如果还没有发送过通知，则在这里发送
+            if not os.path.exists(loss_plot_path):
+                send_telegram_message(end_message)
         
         # 确保关闭 wandb
         if wandb.run is not None:
