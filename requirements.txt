@@ -36,4 +36,5 @@ PyYAML>=6.0.1  # 用于配置文件解析
 pytest>=7.0.0  # 用于测试
 pandas>=2.0.0  # 用于处理 wandb history 数据
 requests>=2.31.0  # 用于发送 Telegram 消息
-matplotlib>=3.0.0  # 用于生成训练图表 
+matplotlib>=3.0.0  # 用于生成训练图表
+psutil>=5.9.0  # 用于进程管理 

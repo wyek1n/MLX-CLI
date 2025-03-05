@@ -28,6 +28,7 @@ import time
 import math
 import matplotlib.pyplot as plt
 import pandas as pd
+import psutil
 
 # 加载环境变量
 load_dotenv()
@@ -1704,6 +1705,21 @@ def fine_tune():
                             send_telegram_message("", loss_plot_path)  # 发送图片
                             notification_sent = True  # 标记通知已发送
                             os.remove(loss_plot_path)  # 清理临时文件
+                            
+                            # 清理 mlx_lm.lora 相关进程
+                            try:
+                                # 查找并终止所有 mlx_lm.lora 进程
+                                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                                    try:
+                                        if proc.info['cmdline'] and 'mlx_lm.lora' in ' '.join(proc.info['cmdline']):
+                                            log.debug(f"终止进程: {proc.info['pid']}")
+                                            psutil.Process(proc.info['pid']).terminate()
+                                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                                        pass
+                                
+                                log.debug("已清理相关进程")
+                            except Exception as e:
+                                log.error(f"清理进程时出错: {str(e)}")
                         else:
                             log.error(f"图表文件未生成: {loss_plot_path}")
                     else:
