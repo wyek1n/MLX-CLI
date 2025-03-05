@@ -1247,6 +1247,17 @@ def fine_tune():
                     "learning_rate": params["learning_rate"]
                 }
             )
+            
+            # 定义要追踪的指标
+            wandb.define_metric("train/global_step", summary="max")
+            wandb.define_metric("train/epoch", summary="max")
+            wandb.define_metric("train/loss", summary="min")
+            wandb.define_metric("train/learning_rate", summary="last")
+            wandb.define_metric("performance/iterations_per_second", summary="mean")
+            wandb.define_metric("performance/tokens_per_second", summary="mean")
+            wandb.define_metric("performance/total_tokens", summary="max")
+            wandb.define_metric("performance/peak_memory_gb", summary="max")
+            
             console.print(f"[green]wandb run 初始化成功: {run_name}[/green]")
         except Exception as e:
             console.print(f"[yellow]wandb 初始化失败: {str(e)}，将不会记录训练过程[/yellow]")
@@ -1322,6 +1333,8 @@ def fine_tune():
                         try:
                             # 解析训练输出
                             metrics = {}
+                            
+                            # 解析迭代信息
                             if "Iter" in line:
                                 iter_match = re.search(r'Iter\s*(\d+)', line)
                                 if iter_match:
@@ -1329,13 +1342,42 @@ def fine_tune():
                                     metrics["train/global_step"] = current_iter
                                     metrics["train/epoch"] = current_iter / params["iters"]
                             
+                            # 解析训练损失
                             if "Train loss" in line:
                                 loss_match = re.search(r'Train loss\s*([\d.]+)', line)
                                 if loss_match:
                                     metrics["train/loss"] = float(loss_match.group(1))
                             
+                            # 解析学习率
+                            if "Learning Rate" in line:
+                                lr_match = re.search(r'Learning Rate\s*([\d.e-]+)', line)
+                                if lr_match:
+                                    metrics["train/learning_rate"] = float(lr_match.group(1))
+                            
+                            # 解析性能指标
+                            if "It/sec" in line:
+                                its_match = re.search(r'It/sec\s*([\d.]+)', line)
+                                if its_match:
+                                    metrics["performance/iterations_per_second"] = float(its_match.group(1))
+                            
+                            if "Tokens/sec" in line:
+                                tps_match = re.search(r'Tokens/sec\s*([\d.]+)', line)
+                                if tps_match:
+                                    metrics["performance/tokens_per_second"] = float(tps_match.group(1))
+                            
+                            if "Trained Tokens" in line:
+                                tokens_match = re.search(r'Trained Tokens\s*(\d+)', line)
+                                if tokens_match:
+                                    metrics["performance/total_tokens"] = int(tokens_match.group(1))
+                            
+                            if "Peak mem" in line:
+                                mem_match = re.search(r'Peak mem\s*([\d.]+)', line)
+                                if mem_match:
+                                    metrics["performance/peak_memory_gb"] = float(mem_match.group(1))
+                            
                             if metrics:
                                 wandb.log(metrics)
+                                log.debug(f"记录指标: {metrics}")
                         except Exception as e:
                             log.error(f"记录指标时出错: {str(e)}")
             
