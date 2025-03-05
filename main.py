@@ -1180,6 +1180,11 @@ def fine_tune():
     """模型微调功能"""
     console.print("\n[bold cyan]模型微调[/bold cyan]")
     
+    # 检查 wandb API key
+    wandb_api_key = os.getenv("WANDB_API_KEY")
+    if not wandb_api_key:
+        console.print("[yellow]警告: 未找到WANDB_API_KEY，将不会记录训练过程[/yellow]")
+    
     # 检查模型目录
     models = []
     try:
@@ -1221,8 +1226,31 @@ def fine_tune():
     params = {
         "batch_size": IntPrompt.ask("请输入批次大小", default=1),
         "num_layers": IntPrompt.ask("请输入微调层数", default=4),
-        "iters": IntPrompt.ask("请输入训练迭代次数", default=1000)
+        "iters": IntPrompt.ask("请输入训练迭代次数", default=1000),
+        "learning_rate": float(Prompt.ask("请输入学习率", default="0.001"))
     }
+    
+    # 初始化 wandb（如果有API key）
+    if wandb_api_key:
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            run_name = f"{selected_model}_{timestamp}"
+            
+            wandb.init(
+                project="mlx-finetune",
+                name=run_name,
+                config={
+                    "model": selected_model,
+                    "batch_size": params["batch_size"],
+                    "num_layers": params["num_layers"],
+                    "iters": params["iters"],
+                    "learning_rate": params["learning_rate"]
+                }
+            )
+            console.print(f"[green]wandb run 初始化成功: {run_name}[/green]")
+        except Exception as e:
+            console.print(f"[yellow]wandb 初始化失败: {str(e)}，将不会记录训练过程[/yellow]")
+            wandb_api_key = None
     
     # 构建训练命令
     cmd = [
@@ -1230,10 +1258,11 @@ def fine_tune():
         "mlx_lm.lora",
         "--train",
         "--model", model_path,
-        "--adapter-path", adapter_path,  # 添加 adapter 权重保存路径
+        "--adapter-path", adapter_path,
         "--batch-size", str(params["batch_size"]),
         "--num-layers", str(params["num_layers"]),
         "--iters", str(params["iters"]),
+        "--learning-rate", str(params["learning_rate"]),
         "--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
     ]
     
@@ -1281,11 +1310,34 @@ def fine_tune():
         signal.signal(signal.SIGTSTP, handle_signal)
         
         try:
-            # 实时显示输出
-            while process.poll() is None:  # 当进程还在运行时
+            # 实时显示输出并记录到 wandb
+            while process.poll() is None:
                 line = process.stdout.readline()
                 if line:
-                    print(line.strip(), flush=True)
+                    line = line.strip()
+                    print(line, flush=True)
+                    
+                    # 解析训练指标并记录到 wandb
+                    if wandb_api_key and "Train loss" in line:
+                        try:
+                            # 解析训练输出
+                            metrics = {}
+                            if "Iter" in line:
+                                iter_match = re.search(r'Iter\s*(\d+)', line)
+                                if iter_match:
+                                    current_iter = int(iter_match.group(1))
+                                    metrics["train/global_step"] = current_iter
+                                    metrics["train/epoch"] = current_iter / params["iters"]
+                            
+                            if "Train loss" in line:
+                                loss_match = re.search(r'Train loss\s*([\d.]+)', line)
+                                if loss_match:
+                                    metrics["train/loss"] = float(loss_match.group(1))
+                            
+                            if metrics:
+                                wandb.log(metrics)
+                        except Exception as e:
+                            log.error(f"记录指标时出错: {str(e)}")
             
             # 读取剩余输出
             remaining_output = process.stdout.read()
@@ -1317,6 +1369,10 @@ def fine_tune():
         console.print(f"[red]训练进程出错: {str(e)}[/red]")
     except Exception as e:
         console.print(f"[red]执行出错: {str(e)}[/red]")
+    finally:
+        # 确保关闭 wandb
+        if wandb.run is not None:
+            wandb.finish()
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):

@@ -1,0 +1,44 @@
+{
+  "os":  "macOS-15.4-arm64-arm-64bit",
+  "python":  "CPython 3.11.11",
+  "startedAt":  "2025-03-05T09:26:07.631590Z",
+  "program":  "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/main.py",
+  "codePath":  "main.py",
+  "git":  {
+    "remote":  "https://github.com/wyek1n/MLX-CLI.git",
+    "commit":  "28655c724db7ad712c01de1adf6e07e17af0fa7f"
+  },
+  "email":  "admin@wye.cool",
+  "root":  "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI",
+  "host":  "m4max",
+  "executable":  "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/venv/bin/python",
+  "codePathLocal":  "main.py",
+  "cpu_count":  16,
+  "cpu_count_logical":  16,
+  "disk":  {
+    "/":  {
+      "total":  "994662584320",
+      "used":  "541065125888"
+    },
+    "/System/Volumes/Data":  {
+      "total":  "994662584320",
+      "used":  "541065125888"
+    }
+  },
+  "memory":  {
+    "total":  "137438953472"
+  },
+  "cpu":  {
+    "count":  16,
+    "countLogical":  16
+  },
+  "apple":  {
+    "name":  "Apple M4 Max",
+    "ecpuCores":  4,
+    "pcpuCores":  12,
+    "gpuCores":  40,
+    "memoryGb":  128,
+    "swapTotalBytes":  "2147483648",
+    "ramTotalBytes":  "137438953472"
+  }
+}
