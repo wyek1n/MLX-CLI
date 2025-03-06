@@ -169,37 +169,64 @@ def download_model():
     """模型下载功能"""
     console.print("\n[bold cyan]模型下载[/bold cyan]")
     
-    # 选择下载源
-    console.print("\n请选择下载源:")
-    console.print("[1] ModelScope (默认)")
-    console.print("[2] HuggingFace")
+    # 显示菜单
+    console.print("\n请选择操作:")
+    console.print("[1] 下载模型")
+    console.print("[2] 删除模型")
     console.print("[0] 返回主菜单")
     
-    source_choice = IntPrompt.ask("请选择", choices=["0", "1", "2"], default="1")
+    choice = IntPrompt.ask("请选择", choices=["0", "1", "2"])
     
-    if source_choice == 0:
+    if choice == 0:
+        return
+    elif choice == 1:
+        # 原有的下载逻辑
+        download_model_logic()
+    elif choice == 2:
+        delete_model()
+
+def delete_model():
+    """删除模型"""
+    # 扫描模型目录
+    models = []
+    try:
+        for item in os.listdir(BASE_MODEL_DIR):
+            if os.path.isdir(os.path.join(BASE_MODEL_DIR, item)) and not item.startswith('.'):
+                models.append(item)
+    except FileNotFoundError:
+        console.print("[red]错误: 未找到模型目录[/red]")
         return
     
-    # 输入模型名称
-    model_name = Prompt.ask("\n请输入模型名称 (例如: Qwen/Qwen2.5-0.5B-Instruct)")
-    model_dir = os.path.join(BASE_MODEL_DIR, model_name.split('/')[-1])
+    if not models:
+        console.print("[yellow]未找到任何可用模型[/yellow]")
+        return
     
-    # 检查模型是否已存在
-    if check_model_exists(model_dir):
-        if not confirm_overwrite(model_dir):
-            console.print("[yellow]已取消下载[/yellow]")
-            return
+    # 显示可用模型列表
+    console.print("\n[bold]可删除的模型列表:[/bold]")
+    for i, model in enumerate(models, 1):
+        console.print(f"[{i}] {model}")
+    console.print("[0] 返回")
     
-    # 确保目录存在
-    os.makedirs(BASE_MODEL_DIR, exist_ok=True)
+    # 选择模型
+    model_choice = int(Prompt.ask(
+        "请选择要删除的模型",
+        choices=["0"] + [str(i) for i in range(1, len(models) + 1)]
+    ))
     
-    try:
-        if source_choice == 1:
-            download_from_modelscope(model_name)
-        else:
-            download_from_huggingface(model_name)
-    except Exception as e:
-        console.print(f"[red]下载过程中出现错误: {str(e)}[/red]")
+    if model_choice == 0:
+        return
+        
+    selected_model = models[model_choice - 1]
+    model_path = os.path.join(BASE_MODEL_DIR, selected_model)
+    
+    # 确认删除
+    if Prompt.ask(f"确定要删除模型 {selected_model}? [y/n]", choices=["y", "n"]) == "y":
+        try:
+            import shutil
+            shutil.rmtree(model_path)
+            console.print(f"[green]已删除模型: {selected_model}[/green]")
+        except Exception as e:
+            console.print(f"[red]删除失败: {str(e)}[/red]")
 
 def prepare_data():
     """数据准备功能"""
@@ -210,9 +237,10 @@ def prepare_data():
     console.print("[2] 数据集预览")
     console.print("[3] 数据集转换")
     console.print("[4] 数据集分割")
+    console.print("[5] 数据集删除")  # 新增选项
     console.print("[0] 返回主菜单")
     
-    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3", "4"])
+    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3", "4", "5"])
     
     if choice == 0:
         return
@@ -224,6 +252,51 @@ def prepare_data():
         convert_dataset()
     elif choice == 4:
         split_dataset()
+    elif choice == 5:
+        delete_dataset()
+
+def delete_dataset():
+    """删除数据集"""
+    # 扫描数据集目录
+    datasets = []
+    try:
+        for item in os.listdir(BASE_DATASET_DIR):
+            if os.path.isdir(os.path.join(BASE_DATASET_DIR, item)) and not item.startswith('.'):
+                datasets.append(item)
+    except FileNotFoundError:
+        console.print("[red]错误: 未找到数据集目录[/red]")
+        return
+    
+    if not datasets:
+        console.print("[yellow]未找到任何可用数据集[/yellow]")
+        return
+    
+    # 显示可用数据集列表
+    console.print("\n[bold]可删除的数据集列表:[/bold]")
+    for i, dataset in enumerate(datasets, 1):
+        console.print(f"[{i}] {dataset}")
+    console.print("[0] 返回")
+    
+    # 选择数据集
+    dataset_choice = int(Prompt.ask(
+        "请选择要删除的数据集",
+        choices=["0"] + [str(i) for i in range(1, len(datasets) + 1)]
+    ))
+    
+    if dataset_choice == 0:
+        return
+        
+    selected_dataset = datasets[dataset_choice - 1]
+    dataset_path = os.path.join(BASE_DATASET_DIR, selected_dataset)
+    
+    # 确认删除
+    if Prompt.ask(f"确定要删除数据集 {selected_dataset}? [y/n]", choices=["y", "n"]) == "y":
+        try:
+            import shutil
+            shutil.rmtree(dataset_path)
+            console.print(f"[green]已删除数据集: {selected_dataset}[/green]")
+        except Exception as e:
+            console.print(f"[red]删除失败: {str(e)}[/red]")
 
 def merge_model():
     """模型合并功能"""
@@ -550,7 +623,7 @@ def chat_with_model():
                     user_input = Prompt.ask("\n[bold blue]User[/bold blue]")
                     if user_input.lower() in ['exit', 'quit']:
                         console.print("\n[yellow]结束对话[/yellow]")
-                        break
+                        break  # 先退出循环
                         
                     console.print("\n[bold green]Assistant[/bold green]", end="")
                     response = chatbot.chat(user_input)
@@ -563,6 +636,9 @@ def chat_with_model():
                     console.print(f"\n[red]对话出错: {str(e)}[/red]")
                     continue
             
+            # 在这里执行清理
+            kill_python_processes()
+            
         except ValueError:
             log.error("用户输入了无效的选择")
             console.print("[red]无效的选择[/red]")
@@ -571,8 +647,6 @@ def chat_with_model():
     except Exception as e:
         log.exception("模型初始化过程中出现错误")
         console.print(f"[red]初始化过程中出现错误: {str(e)}[/red]")
-        console.print("[yellow]请确保模型文件完整且格式正确[/yellow]")
-        console.print(f"[yellow]详细错误日志已保存到: {log_file}[/yellow]")
         return
     finally:
         log.info("=== 结束模型对话功能 ===")
@@ -2022,46 +2096,90 @@ def fine_tune():
         console.print(f"[red]出现错误: {str(e)}[/red]")
         return
 
+def kill_python_processes():
+    """结束所有Python进程"""
+    try:
+        # 先尝试使用 pkill 命令
+        try:
+            # 使用 shell=True 来确保命令正确执行
+            subprocess.run('pkill -f python', shell=True, check=False)
+            log.info("已执行 pkill -f python")
+        except FileNotFoundError:
+            log.warning("pkill 命令不可用，使用备用方法")
+            
+            # 备用方法：使用 psutil
+            current_pid = os.getpid()
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    if proc.info['name'] in ['Python', 'python', 'python3']:
+                        if proc.info['pid'] == current_pid:
+                            continue
+                        proc.kill()
+                        log.info(f"终止Python进程: PID={proc.info['pid']}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+    except Exception as e:
+        log.error(f"结束Python进程时出错: {str(e)}")
+
+def signal_handler(signum, frame):
+    """处理信号"""
+    if signum == signal.SIGTSTP:  # Ctrl+Z
+        kill_python_processes()
+        # 恢复默认的 SIGTSTP 处理
+        signal.signal(signal.SIGTSTP, signal.default_int_handler)
+        # 重新发送信号给自己
+        os.kill(os.getpid(), signal.SIGTSTP)
+
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
     """MLX CLI 主程序"""
     if ctx.invoked_subcommand is None:
-        # 清理屏幕
-        os.system('cls' if os.name == 'nt' else 'clear')
+        # 注册信号处理器
+        signal.signal(signal.SIGTSTP, signal_handler)
         
-        show_header()
-        check_env_vars()
-        check_environment()
-        
-        # 初始化配置
-        config = Config()
-        global show_logs, rich_handler
-        
-        # 从配置文件加载日志显示状态
-        show_logs = config.get("show_logs", False)
-        rich_handler.enabled = show_logs
-        
-        while True:
-            choice = show_menu()
+        try:
+            # 清理屏幕
+            os.system('cls' if os.name == 'nt' else 'clear')
             
-            if choice == 0:
-                console.print("[cyan]感谢使用,再见![/cyan]")
-                break
-            elif choice == 1:
-                download_model()
-            elif choice == 2:
-                chat_with_model()
-            elif choice == 3:
-                prepare_data()
-            elif choice == 4:
-                fine_tune()
-            elif choice == 5:
-                merge_model()
-            elif choice == 6:
-                show_logs = not show_logs
-                rich_handler.enabled = show_logs
-                config.set("show_logs", show_logs)
-                console.print(f"[green]已{'隐藏' if not show_logs else '显示'}日志[/green]")
+            show_header()
+            check_env_vars()
+            check_environment()
+            
+            # 初始化配置
+            config = Config()
+            global show_logs, rich_handler
+            
+            # 从配置文件加载日志显示状态
+            show_logs = config.get("show_logs", False)
+            rich_handler.enabled = show_logs
+            
+            while True:
+                choice = show_menu()
+                
+                if choice == 0:
+                    console.print("[cyan]感谢使用,再见![/cyan]")
+                    kill_python_processes()  # 在正常退出时也执行
+                    break
+                elif choice == 1:
+                    download_model()
+                elif choice == 2:
+                    chat_with_model()
+                elif choice == 3:
+                    prepare_data()
+                elif choice == 4:
+                    fine_tune()
+                elif choice == 5:
+                    merge_model()
+                elif choice == 6:
+                    show_logs = not show_logs
+                    rich_handler.enabled = show_logs
+                    config.set("show_logs", show_logs)
+                    console.print(f"[green]已{'隐藏' if not show_logs else '显示'}日志[/green]")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]程序被中断[/yellow]")
+        finally:
+            # 结束所有Python进程
+            kill_python_processes()
 
 class Config:
     """配置管理类"""
