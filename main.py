@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import psutil
 import traceback
+import numpy as np
 
 # 加载环境变量
 load_dotenv()
@@ -1547,7 +1548,7 @@ def fine_tune():
                     print(line, flush=True)
                     
                     # 解析训练指标并记录到 wandb
-                    if wandb_api_key and "Train loss" in line:
+                    if wandb_api_key and ("Train loss" in line or "Val loss" in line):
                         try:
                             # 解析训练输出
                             metrics = {}
@@ -1565,6 +1566,12 @@ def fine_tune():
                                 loss_match = re.search(r'Train loss\s*([\d.]+)', line)
                                 if loss_match:
                                     metrics["train/loss"] = float(loss_match.group(1))
+                            
+                            # 解析验证损失
+                            if "Val loss" in line:
+                                val_loss_match = re.search(r'Val loss\s*([\d.]+)', line)
+                                if val_loss_match:
+                                    metrics["val/loss"] = float(val_loss_match.group(1))
                             
                             # 解析学习率
                             if "Learning Rate" in line:
@@ -1684,17 +1691,69 @@ def fine_tune():
                             f"Wandb 地址: {wandb_url}"
                         )
                         
-                        # 生成并保存 loss 图表
-                        plt.figure(figsize=(10, 6))
-                        plt.plot(history["train/loss"].values)
-                        plt.title("Training Loss")
-                        plt.xlabel("Iteration")
-                        plt.ylabel("Loss")
-                        plt.grid(True)
+                        # 设置 matplotlib 使用非交互式后端
+                        plt.switch_backend('Agg')
                         
+                        # 生成并保存 loss 图表
+                        fig, ax = plt.subplots(figsize=(12, 7))
+                        
+                        # 设置基本样式
+                        plt.rcParams.update({
+                            'font.size': 12,
+                            'axes.titlesize': 16,
+                            'axes.labelsize': 12,
+                            'axes.spines.top': False,
+                            'axes.spines.right': False,
+                            'grid.alpha': 0.2
+                        })
+                        
+                        # 绘制原始训练损失（浅灰色虚线）
+                        train_loss = history["train/loss"].values
+                        ax.plot(train_loss, color='#e0e0e0', linestyle='--', linewidth=1, alpha=0.5, 
+                               label='Train Loss (Raw)')
+                        
+                        # 使用移动平均平滑曲线（蓝色实线）
+                        window_size = 5
+                        smoothed_train_loss = pd.Series(train_loss).rolling(window=window_size, min_periods=1).mean()
+                        ax.plot(smoothed_train_loss, color='#1f77b4', linewidth=2, 
+                               label='Train Loss (Smoothed)')
+                        
+                        # 绘制验证损失（红色点和线）
+                        if "val/loss" in history.columns:
+                            val_loss = history["val/loss"].values
+                            val_indices = history.index[history["val/loss"].notna()].values
+                            val_loss_clean = val_loss[~np.isnan(val_loss)]
+                            
+                            # 绘制红色细线连接验证点
+                            ax.plot(val_indices, val_loss_clean, color='#ff7f0e', linewidth=1.5,
+                                  label='Val Loss')
+                            # 添加验证点
+                            ax.scatter(val_indices, val_loss_clean, color='#ff7f0e', s=50, zorder=5)
+                        
+                        # 设置标题和标签
+                        ax.set_title('Training & Validation Loss', pad=20, fontweight='bold')
+                        ax.set_xlabel('Iteration', labelpad=10)
+                        ax.set_ylabel('Loss (Cross Entropy)', labelpad=10)
+                        
+                        # 优化网格
+                        ax.grid(True, alpha=0.2, color='gray', linestyle='-', linewidth=0.5)
+                        
+                        # 优化图例
+                        ax.legend(loc='upper right', frameon=True, framealpha=0.95, 
+                                fancybox=True, shadow=True, fontsize=10)
+                        
+                        # 添加轻微的背景渐变
+                        ax.set_facecolor('#f8f9fa')
+                        fig.patch.set_facecolor('white')
+                        
+                        # 调整布局
+                        plt.tight_layout()
+                        
+                        # 保存图表
                         script_dir = os.path.dirname(os.path.abspath(__file__))
                         loss_plot_path = os.path.join(script_dir, "loss_plot.png")
-                        plt.savefig(loss_plot_path, bbox_inches='tight', dpi=300)
+                        plt.savefig(loss_plot_path, bbox_inches='tight', dpi=300, 
+                                  facecolor='white', edgecolor='none')
                         plt.close()
                         
                         log.debug(f"成功生成训练图表: {loss_plot_path}")
