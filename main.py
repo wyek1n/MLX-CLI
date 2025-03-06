@@ -2026,6 +2026,9 @@ def fine_tune():
 def main(ctx: typer.Context):
     """MLX CLI 主程序"""
     if ctx.invoked_subcommand is None:
+        # 清理屏幕
+        os.system('cls' if os.name == 'nt' else 'clear')
+        
         show_header()
         check_env_vars()
         check_environment()
