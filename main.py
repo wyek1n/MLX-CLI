@@ -1699,15 +1699,17 @@ def fine_tune():
                 "save_every": IntPrompt.ask("请输入保存间隔步数", default=1000),
                 "max_seq_length": IntPrompt.ask("请输入最大序列长度", default=8192),
                 "fine_tune_type": Prompt.ask("请选择微调类型", choices=["lora", "dora", "full"], default="lora"),
-                "grad_checkpoint": Prompt.ask("是否使用梯度检查点? [y/n]", choices=["y", "n"], default="n").lower() == "y"
+                "grad_checkpoint": Prompt.ask("是否使用梯度检查点? [y/n]", choices=["y", "n"], default="n").lower() == "y",
+                "resume_adapter_file": None  # 默认为 None
             }
             
-            # 验证层数
-            if params["num_layers"] > model_layers:
-                console.print(f"[yellow]警告: 设置的层数 ({params['num_layers']}) 超过模型实际层数 ({model_layers})，将使用实际层数[/yellow]")
-                params["num_layers"] = model_layers
+            # 询问是否恢复训练
+            if Prompt.ask("是否从已有权重文件恢复训练? [y/n]", choices=["y", "n"], default="n").lower() == "y":
+                resume_path = Prompt.ask("请输入权重文件路径（直接回车使用默认值 None）")
+                if resume_path:
+                    params["resume_adapter_file"] = resume_path
         
-        # 构建训练命令（移到这里）
+        # 构建训练命令
         cmd = [
             "python", "-m",
             "mlx_lm.lora",
@@ -1728,6 +1730,9 @@ def fine_tune():
         
         if params["grad_checkpoint"]:
             cmd.append("--grad-checkpoint")
+            
+        if params["resume_adapter_file"]:
+            cmd.extend(["--resume-adapter-file", params["resume_adapter_file"]])
         
         # 显示命令预览
         console.print("\n[bold]将执行以下命令:[/bold]")

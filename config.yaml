@@ -1,19 +1,35 @@
 adapter_path: /Users/wyek1n/Downloads/MLX/adapter/Qwen2.5-0.5B-Instruct
-batch_size: 4
 data_path: /Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data
 fine_tune_type: lora
 grad_checkpoint: false
-iters: 2000
-learning_rate: 0.001
+learning_rate: 0.0001
 max_seq_length: 8192
 model: /Users/wyek1n/Downloads/MLX/model/Qwen2.5-0.5B-Instruct
 num_layers: 16
 resume_adapter_file: null
-save_every: 1000
+save_every: 50
 seed: 0
 steps_per_eval: 50
-steps_per_report: 10
 test: false
 test_batches: 100
 train: true
-val_batches: 30
+batch_size: 4
+iters: 100
+val_batches: 25
+steps_per_report: 10
+lora_parameters:
+  keys: ["self_attn.q_proj", "self_attn.v_proj"]
+  #keys:
+  #  [
+  #    "mlp.gate_proj",
+  #    "mlp.down_proj",
+  #    "self_attn.q_proj",
+  #    "mlp.up_proj",
+  #    "self_attn.o_proj",
+  #    "self_attn.v_proj",
+  #    "self_attn.k_proj",
+  #  ]
+  rank: 16
+  alpha: 32
+  scale: 10.0
+  dropout: 0.0
