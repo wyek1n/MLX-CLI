@@ -80,8 +80,12 @@ app = typer.Typer(
 )
 
 console = Console()
-BASE_MODEL_DIR = os.getenv("BASE_MODEL_DIR")
-BASE_DATASET_DIR = os.getenv("BASE_DATASET_DIR")
+
+# 环境变量配置
+MLX_HOME = os.getenv("MLX_HOME")  # MLX本地文件夹路径
+BASE_MODEL_DIR = os.path.join(MLX_HOME, "model") if MLX_HOME else None  # 模型目录
+BASE_DATASET_DIR = os.path.join(MLX_HOME, "dataset") if MLX_HOME else None  # 数据集目录
+ADAPTER_DIR = os.path.join(MLX_HOME, "adapter") if MLX_HOME else None  # 权重文件目录
 
 # 从环境变量获取 API tokens
 MODELSCOPE_TOKEN = os.getenv("MODELSCOPE_TOKEN")
@@ -91,8 +95,10 @@ HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 def check_env_vars():
     """检查必要的环境变量是否存在"""
     required_vars = {
+        "MLX_HOME": MLX_HOME,  # 添加 MLX_HOME 检查
         "BASE_MODEL_DIR": BASE_MODEL_DIR,
         "BASE_DATASET_DIR": BASE_DATASET_DIR,
+        "ADAPTER_DIR": ADAPTER_DIR,  # 添加 ADAPTER_DIR 检查
         "MODELSCOPE_TOKEN": MODELSCOPE_TOKEN,
         "HUGGINGFACE_TOKEN": HUGGINGFACE_TOKEN,
         "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
@@ -106,8 +112,8 @@ def check_env_vars():
         console.print("[yellow]警告: 以下环境变量未设置:[/yellow]")
         for var in missing_vars:
             console.print(f"[yellow]- {var}[/yellow]")
-        if any(var in ["BASE_MODEL_DIR", "BASE_DATASET_DIR"] for var in missing_vars):
-            console.print("[red]错误: 基础目录配置缺失[/red]")
+        if "MLX_HOME" in missing_vars:
+            console.print("[red]错误: MLX本地文件夹路径未设置[/red]")
             raise typer.Exit(1)
         else:
             console.print("[yellow]部分功能可能受限[/yellow]")
@@ -139,18 +145,16 @@ def check_environment():
 
 def show_menu():
     """显示主菜单"""
-    console.print("\n[bold cyan]请选择操作:[/bold cyan]")
+    console.print("\n请选择操作:")
     console.print("[1] 模型下载")
-    console.print("[2] 数据准备")
-    console.print("[3] 模型微调")
-    console.print("[4] 模型合并")
-    console.print("[5] 模型评估")
-    console.print("[6] 模型对话")
-    console.print(f"[7] {'隐藏' if show_logs else '显示'}日志")
+    console.print("[2] 模型对话")
+    console.print("[3] 数据准备")
+    console.print("[4] 模型微调")
+    console.print("[5] 模型合并")
+    console.print(f"[6] {'隐藏' if show_logs else '显示'}日志")  # 根据当前状态显示
     console.print("[0] 退出程序")
     
-    choice = IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3", "4", "5", "6", "7"])
-    return choice
+    return IntPrompt.ask("\n请输入选项", choices=["0", "1", "2", "3", "4", "5", "6"])
 
 def check_model_exists(model_dir: str) -> bool:
     """检查模型是否已存在"""
@@ -169,7 +173,12 @@ def download_model():
     console.print("\n请选择下载源:")
     console.print("[1] ModelScope (默认)")
     console.print("[2] HuggingFace")
-    source_choice = IntPrompt.ask("请选择", choices=["1", "2"], default="1")
+    console.print("[0] 返回主菜单")
+    
+    source_choice = IntPrompt.ask("请选择", choices=["0", "1", "2"], default="1")
+    
+    if source_choice == 0:
+        return
     
     # 输入模型名称
     model_name = Prompt.ask("\n请输入模型名称 (例如: Qwen/Qwen2.5-0.5B-Instruct)")
@@ -219,19 +228,205 @@ def prepare_data():
 def merge_model():
     """模型合并功能"""
     console.print("\n[bold cyan]模型合并[/bold cyan]")
-    # TODO: 实现模型合并功能
-    console.print("[yellow]该功能正在开发中...[/yellow]")
+    
+    try:
+        # 扫描模型目录
+        models = []
+        for item in os.listdir(BASE_MODEL_DIR):
+            if os.path.isdir(os.path.join(BASE_MODEL_DIR, item)) and not item.startswith('.'):
+                models.append(item)
+        
+        if not models:
+            console.print("[yellow]未找到任何可用模型，请先下载模型[/yellow]")
+            return
+        
+        # 显示可用模型列表
+        console.print("\n[bold]可用模型列表:[/bold]")
+        for i, model in enumerate(models, 1):
+            console.print(f"[{i}] {model}")
+        console.print("[0] 返回主菜单")
+        
+        # 选择基础模型
+        model_choice = int(Prompt.ask(
+            "请选择基础模型",
+            choices=["0"] + [str(i) for i in range(1, len(models) + 1)]
+        ))
+        
+        if model_choice == 0:
+            return
+            
+        selected_model = models[model_choice - 1]
+        model_path = os.path.join(BASE_MODEL_DIR, selected_model)
+        
+        # 扫描适配器目录
+        adapter_dir = ADAPTER_DIR  # 使用环境变量中的路径
+        adapters = []
+        for item in os.listdir(adapter_dir):
+            if os.path.isdir(os.path.join(adapter_dir, item)) and not item.startswith('.'):
+                adapters.append(item)
+        
+        if not adapters:
+            console.print("[yellow]未找到任何可用权重文件[/yellow]")
+            return
+        
+        # 显示可用权重文件列表
+        console.print("\n[bold]可用权重文件列表:[/bold]")
+        for i, adapter in enumerate(adapters, 1):
+            console.print(f"[{i}] {adapter}")
+        
+        # 选择权重文件
+        adapter_choice = int(Prompt.ask(
+            "请选择权重文件",
+            choices=[str(i) for i in range(1, len(adapters) + 1)]
+        ))
+        selected_adapter = adapters[adapter_choice - 1]
+        adapter_path = os.path.join(adapter_dir, selected_adapter)
+        
+        # 输入新模型名称
+        suffix = Prompt.ask("请输入新模型名称后缀")
+        if not suffix:
+            console.print("[red]错误: 模型名称后缀不能为空[/red]")
+            return
+        
+        # 构建新模型路径
+        new_model_name = f"{selected_model}_{suffix}"
+        save_path = os.path.join(BASE_MODEL_DIR, new_model_name)
+        
+        # 检查新模型是否已存在
+        if os.path.exists(save_path):
+            if not confirm_overwrite(save_path):
+                console.print("[yellow]已取消合并[/yellow]")
+                return
+        
+        # 执行模型合并
+        console.print(f"\n[yellow]正在合并模型...[/yellow]")
+        merge_cmd = [
+            "python", "-m", "mlx_lm.fuse",
+            "--model", model_path,
+            "--adapter-path", adapter_path,
+            "--save-path", save_path
+        ]
+        
+        try:
+            subprocess.check_call(merge_cmd)
+            console.print(f"\n[green]模型合并成功！[/green]")
+            console.print(f"新模型保存在: {save_path}")
+            
+            # 发送通知
+            merge_message = (
+                f"🔄 <b>模型合并完成</b>\n\n"
+                f"基础模型: {selected_model}\n"
+                f"权重文件: {selected_adapter}\n"
+                f"新模型名称: {new_model_name}"
+            )
+            send_telegram_message(merge_message)
+            
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]合并失败: {str(e)}[/red]")
+        except Exception as e:
+            console.print(f"[red]执行出错: {str(e)}[/red]")
+            
+    except Exception as e:
+        console.print(f"[red]出现错误: {str(e)}[/red]")
 
 def evaluate_model():
     """模型评估功能"""
     console.print("\n[bold cyan]模型评估[/bold cyan]")
-    # TODO: 实现模型评估功能
-    console.print("[yellow]该功能正在开发中...[/yellow]")
+    
+    try:
+        # 扫描模型目录
+        models = []
+        for item in os.listdir(BASE_MODEL_DIR):
+            if os.path.isdir(os.path.join(BASE_MODEL_DIR, item)) and not item.startswith('.'):
+                models.append(item)
+        
+        if not models:
+            console.print("[yellow]未找到任何可用模型，请先下载模型[/yellow]")
+            return
+        
+        # 显示可用模型列表
+        console.print("\n[bold]可用模型列表:[/bold]")
+        for i, model in enumerate(models, 1):
+            console.print(f"[{i}] {model}")
+        
+        # 选择模型
+        model_choice = int(Prompt.ask(
+            "请选择模型",
+            choices=[str(i) for i in range(1, len(models) + 1)]
+        ))
+        selected_model = models[model_choice - 1]
+        model_path = os.path.join(BASE_MODEL_DIR, selected_model)
+        
+        # 扫描适配器目录
+        adapter_dir = "/Users/wyek1n/Downloads/MLX/adapter"
+        adapters = []
+        for item in os.listdir(adapter_dir):
+            if os.path.isdir(os.path.join(adapter_dir, item)) and not item.startswith('.'):
+                adapters.append(item)
+        
+        if not adapters:
+            console.print("[yellow]未找到任何可用适配器[/yellow]")
+            return
+        
+        # 显示可用适配器列表
+        console.print("\n[bold]可用适配器列表:[/bold]")
+        for i, adapter in enumerate(adapters, 1):
+            console.print(f"[{i}] {adapter}")
+        
+        # 选择适配器
+        adapter_choice = int(Prompt.ask(
+            "请选择适配器",
+            choices=[str(i) for i in range(1, len(adapters) + 1)]
+        ))
+        selected_adapter = adapters[adapter_choice - 1]
+        adapter_path = os.path.join(adapter_dir, selected_adapter)
+        
+        # 执行评估
+        console.print(f"\n[yellow]正在评估模型...[/yellow]")
+        test_cmd = [
+            "python", "-m", "mlx_lm.lora",
+            "--model", model_path,
+            "--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data",
+            "--adapter-path", adapter_path,
+            "--test"
+        ]
+        
+        try:
+            test_output = subprocess.check_output(test_cmd, universal_newlines=True)
+            test_match = re.search(r'Test loss ([0-9.]+),\s*Test ppl ([0-9.]+)', test_output)
+            if test_match:
+                test_loss = float(test_match.group(1))
+                test_ppl = float(test_match.group(2).rstrip('.'))
+                
+                # 显示评估结果
+                console.print(f"\n[green]评估结果:[/green]")
+                console.print(f"模型: {selected_model}")
+                console.print(f"适配器: {selected_adapter}")
+                console.print(f"测试集损失: {test_loss:.4f}")
+                console.print(f"测试集困惑度: {test_ppl:.4f}")
+                
+                # 发送评估结果通知
+                eval_message = (
+                    f"📊 <b>模型评估结果</b>\n\n"
+                    f"模型: {selected_model}\n"
+                    f"适配器: {selected_adapter}\n"
+                    f"测试集损失: {test_loss:.4f}\n"
+                    f"测试集困惑度: {test_ppl:.4f}"
+                )
+                send_telegram_message(eval_message)
+                
+            else:
+                console.print("[red]无法解析评估结果[/red]")
+                console.print(f"原始输出: {test_output}")
+        except Exception as e:
+            log.error(f"模型评估失败: {str(e)}")
+            console.print(f"[red]评估失败: {str(e)}[/red]")
+            
+    except Exception as e:
+        console.print(f"[red]出现错误: {str(e)}[/red]")
 
 def chat_with_model():
     """模型对话功能"""
-    console.print("\n[bold cyan]模型对话[/bold cyan]")
-    
     try:
         log.info("=== 开始模型对话功能 ===")
         # 检查模型目录
@@ -259,27 +454,32 @@ def chat_with_model():
         console.print("\n[bold]可用模型列表:[/bold]")
         for i, model in enumerate(models, 1):
             console.print(f"[{i}] {model}")
+        console.print("[0] 返回主菜单")
         
         # 选择模型
         try:
             model_choice = int(Prompt.ask(
                 "请选择模型",
-                choices=[str(i) for i in range(1, len(models) + 1)]
+                choices=["0"] + [str(i) for i in range(1, len(models) + 1)]
             ))
+            
+            if model_choice == 0:
+                return
+                
             log.info(f"用户选择了模型 {models[model_choice - 1]}")
-        except ValueError:
-            log.error("用户输入了无效的选择")
-            console.print("[red]无效的选择[/red]")
-            return
-
-        selected_model = models[model_choice - 1]
-        model_path = os.path.join(BASE_MODEL_DIR, selected_model)
-        
-        log.info(f"正在加载模型: {model_path}")
-        console.print(f"\n[yellow]正在加载模型 {selected_model}...[/yellow]")
-        console.print(f"模型路径: {model_path}")
-        
-        try:
+            
+            # 清理屏幕
+            os.system('cls' if os.name == 'nt' else 'clear')
+            
+            # 显示对话界面标题
+            console.print("\n[bold cyan]模型对话[/bold cyan]")
+            selected_model = models[model_choice - 1]
+            model_path = os.path.join(BASE_MODEL_DIR, selected_model)
+            
+            log.info(f"正在加载模型: {model_path}")
+            console.print(f"\n[yellow]正在加载模型 {selected_model}...[/yellow]")
+            console.print(f"模型路径: {model_path}")
+            
             # 确保mlx_lm已安装
             try:
                 log.debug("正在导入 mlx_lm")
@@ -323,7 +523,7 @@ def chat_with_model():
                         self.model,
                         self.tokenizer,
                         prompt=chat_template,
-                        max_tokens=512
+                        max_tokens=2048
                     )
 
                 def chat(self, user_input):
@@ -341,16 +541,18 @@ def chat_with_model():
             # 创建聊天机器人实例
             log.info("创建 Chatbot 实例")
             chatbot = Chatbot(model, tokenizer)
-            console.print("[green]开始对话 (输入 'exit' 或 '退出' 结束对话)[/green]\n")
+            
+            console.print("\n[green]模型已准备就绪，可以开始对话了！[/green]")
+            console.print("[yellow]提示: 输入 'exit' 或 'quit' 结束对话[/yellow]\n")
             
             while True:
                 try:
-                    user_input = Prompt.ask("\n[bold cyan]用户[/bold cyan]")
-                    if user_input.lower() in ["退出", "exit"]:
-                        log.info("用户退出对话")
+                    user_input = Prompt.ask("\n[bold blue]User[/bold blue]")
+                    if user_input.lower() in ['exit', 'quit']:
+                        console.print("\n[yellow]结束对话[/yellow]")
                         break
                         
-                    console.print("[bold green]助手[/bold green]", end=": ")
+                    console.print("\n[bold green]Assistant[/bold green]", end="")
                     response = chatbot.chat(user_input)
                     for text in response:
                         if text != "":
@@ -361,12 +563,17 @@ def chat_with_model():
                     console.print(f"\n[red]对话出错: {str(e)}[/red]")
                     continue
             
-        except Exception as e:
-            log.exception("模型初始化过程中出现错误")
-            console.print(f"[red]初始化过程中出现错误: {str(e)}[/red]")
-            console.print("[yellow]请确保模型文件完整且格式正确[/yellow]")
-            console.print(f"[yellow]详细错误日志已保存到: {log_file}[/yellow]")
+        except ValueError:
+            log.error("用户输入了无效的选择")
+            console.print("[red]无效的选择[/red]")
             return
+            
+    except Exception as e:
+        log.exception("模型初始化过程中出现错误")
+        console.print(f"[red]初始化过程中出现错误: {str(e)}[/red]")
+        console.print("[yellow]请确保模型文件完整且格式正确[/yellow]")
+        console.print(f"[yellow]详细错误日志已保存到: {log_file}[/yellow]")
+        return
     finally:
         log.info("=== 结束模型对话功能 ===")
 
@@ -1328,509 +1535,492 @@ def fine_tune():
     console.print("\n[bold]可用模型列表:[/bold]")
     for i, model in enumerate(models, 1):
         console.print(f"[{i}] {model}")
+    console.print("[0] 返回主菜单")
     
     # 选择模型
     try:
         model_choice = int(Prompt.ask(
             "请选择模型",
-            choices=[str(i) for i in range(1, len(models) + 1)]
+            choices=["0"] + [str(i) for i in range(1, len(models) + 1)]
         ))
-    except ValueError:
-        console.print("[red]无效的选择[/red]")
-        return
-
-    selected_model = models[model_choice - 1]
-    model_path = os.path.join(BASE_MODEL_DIR, selected_model)
-    
-    # 获取模型实际层数
-    model_layers = get_model_layers(model_path)
-    console.print(f"[cyan]模型层数: {model_layers}[/cyan]")
-    
-    # 创建 adapter 权重保存目录
-    adapter_path = os.path.join("/Users/wyek1n/Downloads/MLX/adapter", selected_model)
-    os.makedirs(adapter_path, exist_ok=True)
-    
-    # 询问是否使用配置文件
-    use_config = Prompt.ask("是否使用配置文件?", choices=["y", "n"], default="n").lower() == "y"
-    
-    if use_config:
-        config_path = "config.yaml"
-        if not os.path.exists(config_path):
-            console.print("[yellow]配置文件不存在，将创建默认配置文件[/yellow]")
-            # 创建默认配置文件，使用选择的模型路径
-            default_config = {
-                "model": model_path,
-                "train": True,
-                "seed": 0,
-                "num_layers": model_layers,  # 使用实际的层数
-                "batch_size": 1,
-                "iters": 100,
-                "val_batches": 25,
-                "learning_rate": 1e-6,
-                "steps_per_report": 10,
-                "steps_per_eval": 200,
-                "resume_adapter_file": None,
-                "save_every": 1000,
-                "test": False,
-                "test_batches": 100,
-                "max_seq_length": 8192,
-                "grad_checkpoint": True,
-                "fine_tune_type": "lora",
-                "adapter_path": adapter_path,  # 添加 adapter 保存路径
-                "data_path": "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"  # 添加数据集路径
-            }
-            with open(config_path, "w", encoding="utf-8") as f:
-                yaml.dump(default_config, f, allow_unicode=True)
-            console.print("[green]已创建配置文件，请根据需要修改配置后重新运行[/green]")
+        
+        if model_choice == 0:
             return
-        else:
-            # 加载现有配置文件并更新模型和数据集路径
-            config = load_config(config_path)
-            if not config:
+            
+        selected_model = models[model_choice - 1]
+        model_path = os.path.join(BASE_MODEL_DIR, selected_model)
+        
+        # 获取模型实际层数
+        model_layers = get_model_layers(model_path)
+        console.print(f"[cyan]模型层数: {model_layers}[/cyan]")
+        
+        # 创建 adapter 权重保存目录
+        adapter_path = os.path.join(ADAPTER_DIR, selected_model)  # 使用环境变量中的路径
+        os.makedirs(adapter_path, exist_ok=True)
+        
+        # 询问是否使用配置文件
+        use_config = Prompt.ask("是否使用配置文件?", choices=["y", "n"], default="n").lower() == "y"
+        
+        if use_config:
+            config_path = "config.yaml"
+            if not os.path.exists(config_path):
+                console.print("[yellow]配置文件不存在，将创建默认配置文件[/yellow]")
+                # 创建默认配置文件，使用选择的模型路径
+                default_config = {
+                    "model": model_path,
+                    "train": True,
+                    "seed": 0,
+                    "num_layers": model_layers,  # 使用实际的层数
+                    "batch_size": 1,
+                    "iters": 100,
+                    "val_batches": 25,
+                    "learning_rate": 1e-6,
+                    "steps_per_report": 10,
+                    "steps_per_eval": 200,
+                    "resume_adapter_file": None,
+                    "save_every": 1000,
+                    "test": False,
+                    "test_batches": 100,
+                    "max_seq_length": 8192,
+                    "grad_checkpoint": True,
+                    "fine_tune_type": "lora",
+                    "adapter_path": adapter_path,  # 添加 adapter 保存路径
+                    "data_path": "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"  # 添加数据集路径
+                }
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(default_config, f, allow_unicode=True)
+                console.print("[green]已创建配置文件，请根据需要修改配置后重新运行[/green]")
                 return
+            else:
+                # 加载现有配置文件并更新模型和数据集路径
+                config = load_config(config_path)
+                if not config:
+                    return
+                
+                # 更新配置
+                config["model"] = model_path
+                config["adapter_path"] = adapter_path
+                config["data_path"] = "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
+                
+                # 保存更新后的配置
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(config, f, allow_unicode=True)
+                
+                console.print("[green]已更新配置文件[/green]")
+                params = config
+        else:
+            # 交互式设置参数
+            params = {
+                "batch_size": IntPrompt.ask("请输入批次大小", default=1),
+                "num_layers": IntPrompt.ask(
+                    "请输入微调层数",
+                    default=model_layers,
+                    show_choices=False,
+                    show_default=True
+                ),
+                "iters": IntPrompt.ask("请输入训练迭代次数", default=100),
+                "learning_rate": float(Prompt.ask("请输入学习率", default="1e-6")),
+                "val_batches": IntPrompt.ask("请输入验证批次数", default=25),
+                "steps_per_eval": IntPrompt.ask("请输入验证间隔步数", default=200),
+                "save_every": IntPrompt.ask("请输入保存间隔步数", default=1000),
+                "max_seq_length": IntPrompt.ask("请输入最大序列长度", default=8192),
+                "fine_tune_type": Prompt.ask("请选择微调类型", choices=["lora", "dora", "full"], default="lora"),
+                "grad_checkpoint": Prompt.ask("是否使用梯度检查点? [y/n]", choices=["y", "n"], default="n").lower() == "y"
+            }
             
-            # 更新配置
-            config["model"] = model_path
-            config["adapter_path"] = adapter_path
-            config["data_path"] = "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
-            
-            # 保存更新后的配置
-            with open(config_path, "w", encoding="utf-8") as f:
-                yaml.dump(config, f, allow_unicode=True)
-            
-            console.print("[green]已更新配置文件[/green]")
-            params = config
-    else:
-        # 交互式设置参数
-        params = {
-            "batch_size": IntPrompt.ask("请输入批次大小", default=1),
-            "num_layers": IntPrompt.ask(
-                "请输入微调层数",
-                default=model_layers,
-                show_choices=False,
-                show_default=True
-            ),
-            "iters": IntPrompt.ask("请输入训练迭代次数", default=100),
-            "learning_rate": float(Prompt.ask("请输入学习率", default="1e-6")),
-            "val_batches": IntPrompt.ask("请输入验证批次数", default=25),
-            "steps_per_eval": IntPrompt.ask("请输入验证间隔步数", default=200),
-            "save_every": IntPrompt.ask("请输入保存间隔步数", default=1000),
-            "max_seq_length": IntPrompt.ask("请输入最大序列长度", default=8192),
-            "fine_tune_type": Prompt.ask("请选择微调类型", choices=["lora", "dora", "full"], default="lora"),
-            "grad_checkpoint": Prompt.ask("是否使用梯度检查点?", choices=["y", "n"], default="y").lower() == "y"
-        }
+            # 验证层数
+            if params["num_layers"] > model_layers:
+                console.print(f"[yellow]警告: 设置的层数 ({params['num_layers']}) 超过模型实际层数 ({model_layers})，将使用实际层数[/yellow]")
+                params["num_layers"] = model_layers
         
-        # 验证层数
-        if params["num_layers"] > model_layers:
-            console.print(f"[yellow]警告: 设置的层数 ({params['num_layers']}) 超过模型实际层数 ({model_layers})，将使用实际层数[/yellow]")
-            params["num_layers"] = model_layers
-    
-    # 构建训练命令（移到这里）
-    cmd = [
-        "python", "-m",
-        "mlx_lm.lora",
-        "--train",
-        "--model", model_path,
-        "--adapter-path", adapter_path,
-        "--fine-tune-type", params["fine_tune_type"],
-        "--num-layers", str(params["num_layers"]),
-        "--batch-size", str(params["batch_size"]),
-        "--iters", str(params["iters"]),
-        "--val-batches", str(params["val_batches"]),
-        "--learning-rate", str(params["learning_rate"]),
-        "--steps-per-eval", str(params["steps_per_eval"]),
-        "--save-every", str(params["save_every"]),
-        "--max-seq-length", str(params["max_seq_length"]),
-        "--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
-    ]
-    
-    if params["grad_checkpoint"]:
-        cmd.append("--grad-checkpoint")
-    
-    # 显示命令预览
-    console.print("\n[bold]将执行以下命令:[/bold]")
-    console.print(" ".join(cmd))
-    
-    # 确认执行
-    if not Prompt.ask("\n是否开始训练?", choices=["y", "n"], default="y").lower() == "y":
-        console.print("[yellow]已取消训练[/yellow]")
-        return
-    
-    # 发送开始训练通知
-    start_message = (
-        f"🚀 <b>模型微调开始</b>\n\n"
-        f"模型: {selected_model}\n\n"
-        f"批次大小: {params['batch_size']}\n"
-        f"微调层数: {params['num_layers']}\n"
-        f"训练迭代: {params['iters']}\n"
-        f"学习率: {params['learning_rate']}\n"
-        f"微调类型: {params['fine_tune_type']}\n"
-        f"验证批次: {params['val_batches']}\n"
-        f"验证间隔: {params['steps_per_eval']}\n"
-        f"保存间隔: {params['save_every']}\n"
-        f"最大长度: {params['max_seq_length']}\n"
-        f"梯度检查点: {'是' if params['grad_checkpoint'] else '否'}"
-    )
-    send_telegram_message(start_message)
-    
-    try:
-        # 初始化 wandb（如果有API key）
-        if wandb_api_key:
-            try:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                run_name = f"{selected_model}_{timestamp}"
-                
-                wandb.init(
-                    project="mlx-finetune",
-                    name=run_name,
-                    config={
-                        "model": selected_model,
-                        "batch_size": params["batch_size"],
-                        "num_layers": params["num_layers"],
-                        "iters": params["iters"],
-                        "learning_rate": params["learning_rate"]
-                    }
-                )
-                
-                # 定义要追踪的指标
-                wandb.define_metric("train/global_step", summary="max")
-                wandb.define_metric("train/epoch", summary="max")
-                wandb.define_metric("train/loss", summary="min")
-                wandb.define_metric("train/learning_rate", summary="last")
-                wandb.define_metric("performance/iterations_per_second", summary="mean")
-                wandb.define_metric("performance/tokens_per_second", summary="mean")
-                wandb.define_metric("performance/total_tokens", summary="max")
-                wandb.define_metric("performance/peak_memory_gb", summary="max")
-                
-                console.print(f"[green]wandb run 初始化成功: {run_name}[/green]")
-            except Exception as e:
-                console.print(f"[yellow]wandb 初始化失败: {str(e)}，将不会记录训练过程[/yellow]")
-                wandb_api_key = None
+        # 构建训练命令（移到这里）
+        cmd = [
+            "python", "-m",
+            "mlx_lm.lora",
+            "--train",
+            "--model", model_path,
+            "--adapter-path", adapter_path,
+            "--fine-tune-type", params["fine_tune_type"],
+            "--num-layers", str(params["num_layers"]),
+            "--batch-size", str(params["batch_size"]),
+            "--iters", str(params["iters"]),
+            "--val-batches", str(params["val_batches"]),
+            "--learning-rate", str(params["learning_rate"]),
+            "--steps-per-eval", str(params["steps_per_eval"]),
+            "--save-every", str(params["save_every"]),
+            "--max-seq-length", str(params["max_seq_length"]),
+            "--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data"
+        ]
         
-        # 执行训练
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # 合并标准错误到标准输出
-            universal_newlines=True,
-            bufsize=1,
-            preexec_fn=os.setsid,  # 在新的进程组中运行
-            env=os.environ.copy()  # 使用当前环境变量
+        if params["grad_checkpoint"]:
+            cmd.append("--grad-checkpoint")
+        
+        # 显示命令预览
+        console.print("\n[bold]将执行以下命令:[/bold]")
+        console.print(" ".join(cmd))
+        
+        # 确认执行
+        if not Prompt.ask("\n是否开始训练?", choices=["y", "n"], default="y").lower() == "y":
+            console.print("[yellow]已取消训练[/yellow]")
+            return
+        
+        # 发送开始训练通知
+        start_message = (
+            f"🚀 <b>模型微调开始</b>\n\n"
+            f"模型: {selected_model}\n\n"
+            f"批次大小: {params['batch_size']}\n"
+            f"微调层数: {params['num_layers']}\n"
+            f"训练迭代: {params['iters']}\n"
+            f"学习率: {params['learning_rate']}\n"
+            f"微调类型: {params['fine_tune_type']}\n"
+            f"验证批次: {params['val_batches']}\n"
+            f"验证间隔: {params['steps_per_eval']}\n"
+            f"保存间隔: {params['save_every']}\n"
+            f"最大长度: {params['max_seq_length']}\n"
+            f"梯度检查点: {'是' if params['grad_checkpoint'] else '否'}"
         )
-        
-        def handle_signal(signum, frame):
-            """处理中断信号"""
-            if process.poll() is None:  # 如果进程还在运行
-                try:
-                    # 终止整个进程组
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                    process.wait(timeout=5)  # 等待进程结束
-                except:
-                    # 如果进程没有及时结束，强制终止
-                    try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                    except:
-                        pass
-            raise KeyboardInterrupt
-        
-        # 设置信号处理器
-        original_sigint = signal.getsignal(signal.SIGINT)
-        original_sigtstp = signal.getsignal(signal.SIGTSTP)
-        signal.signal(signal.SIGINT, handle_signal)
-        signal.signal(signal.SIGTSTP, handle_signal)
+        send_telegram_message(start_message)
         
         try:
-            # 实时显示输出并记录到 wandb
-            while process.poll() is None:
-                line = process.stdout.readline()
-                if line:
-                    line = line.strip()
-                    print(line, flush=True)
-                    
-                    # 解析训练指标并记录到 wandb
-                    if wandb_api_key and ("Train loss" in line or "Val loss" in line):
-                        try:
-                            # 解析训练输出
-                            metrics = {}
-                            
-                            # 解析迭代信息
-                            if "Iter" in line:
-                                iter_match = re.search(r'Iter\s*(\d+)', line)
-                                if iter_match:
-                                    current_iter = int(iter_match.group(1))
-                                    metrics["train/global_step"] = current_iter
-                                    metrics["train/epoch"] = current_iter / params["iters"]
-                            
-                            # 解析训练损失
-                            if "Train loss" in line:
-                                loss_match = re.search(r'Train loss\s*([\d.]+)', line)
-                                if loss_match:
-                                    metrics["train/loss"] = float(loss_match.group(1))
-                            
-                            # 解析验证损失
-                            if "Val loss" in line:
-                                val_loss_match = re.search(r'Val loss\s*([\d.]+)', line)
-                                if val_loss_match:
-                                    metrics["val/loss"] = float(val_loss_match.group(1))
-                            
-                            # 解析学习率
-                            if "Learning Rate" in line:
-                                lr_match = re.search(r'Learning Rate\s*([\d.e-]+)', line)
-                                if lr_match:
-                                    metrics["train/learning_rate"] = float(lr_match.group(1))
-                            
-                            # 解析性能指标
-                            if "It/sec" in line:
-                                its_match = re.search(r'It/sec\s*([\d.]+)', line)
-                                if its_match:
-                                    metrics["performance/iterations_per_second"] = float(its_match.group(1))
-                            
-                            if "Tokens/sec" in line:
-                                tps_match = re.search(r'Tokens/sec\s*([\d.]+)', line)
-                                if tps_match:
-                                    metrics["performance/tokens_per_second"] = float(tps_match.group(1))
-                            
-                            if "Trained Tokens" in line:
-                                tokens_match = re.search(r'Trained Tokens\s*(\d+)', line)
-                                if tokens_match:
-                                    metrics["performance/total_tokens"] = int(tokens_match.group(1))
-                            
-                            if "Peak mem" in line:
-                                mem_match = re.search(r'Peak mem\s*([\d.]+)', line)
-                                if mem_match:
-                                    metrics["performance/peak_memory_gb"] = float(mem_match.group(1))
-                            
-                            if metrics:
-                                wandb.log(metrics)
-                                log.debug(f"记录指标: {metrics}")
-                        except Exception as e:
-                            log.error(f"记录指标时出错: {str(e)}")
-            
-            # 读取剩余输出
-            remaining_output = process.stdout.read()
-            if remaining_output:
-                print(remaining_output.strip(), flush=True)
-            
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, cmd)
-                
-        finally:
-            # 恢复原始信号处理器
-            signal.signal(signal.SIGINT, original_sigint)
-            signal.signal(signal.SIGTSTP, original_sigtstp)
-            
-            # 确保进程被终止
-            if process.poll() is None:
+            # 初始化 wandb（如果有API key）
+            if wandb_api_key:
                 try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                    process.wait(timeout=5)
-                except:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    run_name = f"{selected_model}_{timestamp}"
+                    
+                    wandb.init(
+                        project="mlx-finetune",
+                        name=run_name,
+                        config={
+                            "model": selected_model,
+                            "batch_size": params["batch_size"],
+                            "num_layers": params["num_layers"],
+                            "iters": params["iters"],
+                            "learning_rate": params["learning_rate"]
+                        }
+                    )
+                    
+                    # 定义要追踪的指标
+                    wandb.define_metric("train/global_step", summary="max")
+                    wandb.define_metric("train/epoch", summary="max")
+                    wandb.define_metric("train/loss", summary="min")
+                    wandb.define_metric("train/learning_rate", summary="last")
+                    wandb.define_metric("performance/iterations_per_second", summary="mean")
+                    wandb.define_metric("performance/tokens_per_second", summary="mean")
+                    wandb.define_metric("performance/total_tokens", summary="max")
+                    wandb.define_metric("performance/peak_memory_gb", summary="max")
+                    
+                    console.print(f"[green]wandb run 初始化成功: {run_name}[/green]")
+                except Exception as e:
+                    console.print(f"[yellow]wandb 初始化失败: {str(e)}，将不会记录训练过程[/yellow]")
+                    wandb_api_key = None
+            
+            # 执行训练
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # 合并标准错误到标准输出
+                universal_newlines=True,
+                bufsize=1,
+                preexec_fn=os.setsid,  # 在新的进程组中运行
+                env=os.environ.copy()  # 使用当前环境变量
+            )
+            
+            def handle_signal(signum, frame):
+                """处理中断信号"""
+                if process.poll() is None:  # 如果进程还在运行
                     try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                        # 终止整个进程组
+                        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                        process.wait(timeout=5)  # 等待进程结束
                     except:
-                        pass
+                        # 如果进程没有及时结束，强制终止
+                        try:
+                            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                        except:
+                            pass
+                raise KeyboardInterrupt
             
-    except KeyboardInterrupt:
-        end_message = "❌ <b>训练已被用户中断</b>"
-        send_telegram_message(end_message)
-        console.print("\n[yellow]训练已被用户中断[/yellow]")
-    except subprocess.CalledProcessError as e:
-        end_message = f"❌ <b>训练进程出错</b>\n\n错误信息: {str(e)}"
-        send_telegram_message(end_message)
-        console.print(f"[red]训练进程出错: {str(e)}[/red]")
-    except Exception as e:
-        end_message = f"❌ <b>执行出错</b>\n\n错误信息: {str(e)}"
-        send_telegram_message(end_message)
-        console.print(f"[red]执行出错: {str(e)}[/red]")
-    finally:
-        # 计算训练时间
-        end_time = time.time()
-        duration = format_time_duration(int(end_time - start_time))
-        
-        if process.returncode == 0:
-            # 获取 wandb 运行的 URL
-            wandb_url = wandb.run.get_url() if wandb.run else "未使用 wandb"
-            
-            # 获取最终的训练指标
-            final_metrics = {}
-            end_message = None  # 初始化 end_message
-            notification_sent = False  # 添加通知发送标志
+            # 设置信号处理器
+            original_sigint = signal.getsignal(signal.SIGINT)
+            original_sigtstp = signal.getsignal(signal.SIGTSTP)
+            signal.signal(signal.SIGINT, handle_signal)
+            signal.signal(signal.SIGTSTP, handle_signal)
             
             try:
-                if wandb.run:
-                    # 获取训练历史
-                    api = wandb.Api()
-                    run = api.run(f"wyek1n-wye/mlx-finetune/{wandb.run.id}")
-                    
-                    # 等待同步完成
-                    while not run.summary.get("_wandb", {}).get("runtime", 0):
-                        time.sleep(1)
-                    
-                    # 获取历史数据
-                    history = pd.DataFrame(run.scan_history())
-                    
-                    if len(history) > 0:  # 检查是否有历史数据
-                        final_metrics = {
-                            "loss": history["train/loss"].iloc[-1],
-                            "perplexity": math.exp(history["train/loss"].iloc[-1]),
-                            "total_tokens": history["performance/total_tokens"].iloc[-1],
-                            "tokens_per_second": history["performance/tokens_per_second"].mean(),
-                            "peak_memory": history["performance/peak_memory_gb"].max()
-                        }
+                # 实时显示输出并记录到 wandb
+                while process.poll() is None:
+                    line = process.stdout.readline()
+                    if line:
+                        line = line.strip()
+                        print(line, flush=True)
                         
-                        # 构建完成通知消息
-                        end_message = (
-                            f"✅ <b>模型微调完成</b>\n\n"
-                            f"模型: {selected_model}\n"
-                            f"训练时长: {duration}\n"
-                            f"最终损失: {final_metrics['loss']:.4f}\n"
-                            f"困惑度: {final_metrics['perplexity']:.4f}\n"
-                            f"总处理tokens: {final_metrics['total_tokens']:,}\n"
-                            f"平均速度: {final_metrics['tokens_per_second']:.2f} tokens/s\n"
-                            f"峰值内存: {final_metrics['peak_memory']:.2f} GB\n"
-                            f"Wandb 地址: {wandb_url}"
-                        )
-                        
-                        # 设置 matplotlib 使用非交互式后端
-                        plt.switch_backend('Agg')
-                        
-                        # 生成并保存 loss 图表
-                        fig, ax = plt.subplots(figsize=(12, 7))
-                        
-                        # 设置基本样式
-                        plt.rcParams.update({
-                            'font.size': 12,
-                            'axes.titlesize': 16,
-                            'axes.labelsize': 12,
-                            'axes.spines.top': False,
-                            'axes.spines.right': False,
-                            'grid.alpha': 0.2
-                        })
-                        
-                        # 绘制原始训练损失（浅灰色虚线）
-                        train_loss = history["train/loss"].values
-                        ax.plot(train_loss, color='#e0e0e0', linestyle='--', linewidth=1, alpha=0.5, 
-                               label='Train Loss (Raw)')
-                        
-                        # 使用移动平均平滑曲线（蓝色实线）
-                        window_size = 5
-                        smoothed_train_loss = pd.Series(train_loss).rolling(window=window_size, min_periods=1).mean()
-                        ax.plot(smoothed_train_loss, color='#1f77b4', linewidth=2, 
-                               label='Train Loss (Smoothed)')
-                        
-                        # 绘制验证损失（红色点和线）
-                        if "val/loss" in history.columns:
-                            val_loss = history["val/loss"].values
-                            val_indices = history.index[history["val/loss"].notna()].values
-                            val_loss_clean = val_loss[~np.isnan(val_loss)]
-                            
-                            # 绘制红色细线连接验证点
-                            ax.plot(val_indices, val_loss_clean, color='#ff7f0e', linewidth=1.5,
-                                  label='Val Loss')
-                            # 添加验证点
-                            ax.scatter(val_indices, val_loss_clean, color='#ff7f0e', s=50, zorder=5)
-                        
-                        # 设置标题和标签
-                        ax.set_title('Training & Validation Loss', pad=20, fontweight='bold')
-                        ax.set_xlabel('Iteration', labelpad=10)
-                        ax.set_ylabel('Loss (Cross Entropy)', labelpad=10)
-                        
-                        # 优化网格
-                        ax.grid(True, alpha=0.2, color='gray', linestyle='-', linewidth=0.5)
-                        
-                        # 优化图例
-                        ax.legend(loc='upper right', frameon=True, framealpha=0.95, 
-                                fancybox=True, shadow=True, fontsize=10)
-                        
-                        # 添加轻微的背景渐变
-                        ax.set_facecolor('#f8f9fa')
-                        fig.patch.set_facecolor('white')
-                        
-                        # 调整布局
-                        plt.tight_layout()
-                        
-                        # 保存图表
-                        script_dir = os.path.dirname(os.path.abspath(__file__))
-                        loss_plot_path = os.path.join(script_dir, "loss_plot.png")
-                        plt.savefig(loss_plot_path, bbox_inches='tight', dpi=300, 
-                                  facecolor='white', edgecolor='none')
-                        plt.close()
-                        
-                        log.debug(f"成功生成训练图表: {loss_plot_path}")
-                        
-                        # 发送通知和图片
-                        if os.path.exists(loss_plot_path):
-                            log.debug(f"图表文件已生成: {loss_plot_path}")
-                            send_telegram_message(end_message)  # 发送一次完整通知
-                            send_telegram_message("", loss_plot_path)  # 发送图片
-                            notification_sent = True  # 标记通知已发送
-                            os.remove(loss_plot_path)  # 清理临时文件
-                            
-                            # 清理 mlx_lm.lora 相关进程
+                        # 解析训练指标并记录到 wandb
+                        if wandb_api_key and ("Train loss" in line or "Val loss" in line):
                             try:
-                                # 查找并终止所有 Python 相关进程
-                                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                                    try:
-                                        cmdline = ' '.join(proc.info['cmdline'] or [])
-                                        # 终止所有与训练相关的 Python 进程
-                                        if ('python' in proc.info['name'].lower() and 
-                                            ('mlx_lm.lora' in cmdline or 
-                                             'mlx-lm' in cmdline or 
-                                             'mlx_lm' in cmdline)):
-                                            log.debug(f"终止进程: {proc.info['pid']} ({cmdline})")
-                                            proc_obj = psutil.Process(proc.info['pid'])
-                                            # 终止子进程
-                                            children = proc_obj.children(recursive=True)
-                                            for child in children:
-                                                child.terminate()
-                                            # 终止主进程
-                                            proc_obj.terminate()
-                                            
-                                            # 等待进程结束
-                                            gone, alive = psutil.wait_procs([proc_obj] + children, timeout=3)
-                                            
-                                            # 强制结束未响应的进程
-                                            for p in alive:
-                                                p.kill()
-                                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                                        continue
+                                # 解析训练输出
+                                metrics = {}
                                 
-                                log.debug("已清理相关进程")
+                                # 解析迭代信息
+                                if "Iter" in line:
+                                    iter_match = re.search(r'Iter\s*(\d+)', line)
+                                    if iter_match:
+                                        current_iter = int(iter_match.group(1))
+                                        metrics["train/global_step"] = current_iter
+                                        metrics["train/epoch"] = current_iter / params["iters"]
+                                
+                                # 解析训练损失
+                                if "Train loss" in line:
+                                    loss_match = re.search(r'Train loss\s*([\d.]+)', line)
+                                    if loss_match:
+                                        metrics["train/loss"] = float(loss_match.group(1))
+                                
+                                # 解析验证损失
+                                if "Val loss" in line:
+                                    val_loss_match = re.search(r'Val loss\s*([\d.]+)', line)
+                                    if val_loss_match:
+                                        metrics["val/loss"] = float(val_loss_match.group(1))
+                                
+                                # 解析学习率
+                                if "Learning Rate" in line:
+                                    lr_match = re.search(r'Learning Rate\s*([\d.e-]+)', line)
+                                    if lr_match:
+                                        metrics["train/learning_rate"] = float(lr_match.group(1))
+                                
+                                # 解析性能指标
+                                if "It/sec" in line:
+                                    its_match = re.search(r'It/sec\s*([\d.]+)', line)
+                                    if its_match:
+                                        metrics["performance/iterations_per_second"] = float(its_match.group(1))
+                                
+                                if "Tokens/sec" in line:
+                                    tps_match = re.search(r'Tokens/sec\s*([\d.]+)', line)
+                                    if tps_match:
+                                        metrics["performance/tokens_per_second"] = float(tps_match.group(1))
+                                
+                                if "Trained Tokens" in line:
+                                    tokens_match = re.search(r'Trained Tokens\s*(\d+)', line)
+                                    if tokens_match:
+                                        metrics["performance/total_tokens"] = int(tokens_match.group(1))
+                                
+                                if "Peak mem" in line:
+                                    mem_match = re.search(r'Peak mem\s*([\d.]+)', line)
+                                    if mem_match:
+                                        metrics["performance/peak_memory_gb"] = float(mem_match.group(1))
+                                
+                                if metrics:
+                                    wandb.log(metrics)
+                                    log.debug(f"记录指标: {metrics}")
                             except Exception as e:
-                                log.error(f"清理进程时出错: {str(e)}")
-                                log.error(traceback.format_exc())
-                        else:
-                            log.error(f"图表文件未生成: {loss_plot_path}")
-                    else:
-                        log.warning("未找到训练历史数据")
-                        end_message = (
-                            f"✅ <b>模型微调完成</b>\n\n"
-                            f"模型: {selected_model}\n"
-                            f"训练时长: {duration}\n"
-                            f"Wandb 地址: {wandb_url}"
-                        )
-                    
-                    # 完成后再关闭 wandb
-                    wandb.finish()
-            except Exception as e:
-                log.error(f"获取训练指标失败: {str(e)}")
-                import traceback
-                log.error(f"详细错误: {traceback.format_exc()}")
-                final_metrics = {}
-                end_message = (
-                    f"✅ <b>模型微调完成</b>\n\n"
-                    f"模型: {selected_model}\n"
-                    f"训练时长: {duration}\n"
-                    f"Wandb 地址: {wandb_url}"
-                )
+                                log.error(f"记录指标时出错: {str(e)}")
+                
+                # 读取剩余输出
+                remaining_output = process.stdout.read()
+                if remaining_output:
+                    print(remaining_output.strip(), flush=True)
+                
+                if process.returncode != 0:
+                    raise subprocess.CalledProcessError(process.returncode, cmd)
+                        
+            finally:
+                # 恢复原始信号处理器
+                signal.signal(signal.SIGINT, original_sigint)
+                signal.signal(signal.SIGTSTP, original_sigtstp)
+                
+                # 确保进程被终止
+                if process.poll() is None:
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                        process.wait(timeout=5)
+                    except:
+                        try:
+                            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                        except:
+                            pass
+                
+        except KeyboardInterrupt:
+            end_message = "❌ <b>训练已被用户中断</b>"
+            send_telegram_message(end_message)
+            console.print("\n[yellow]训练已被用户中断[/yellow]")
+        except subprocess.CalledProcessError as e:
+            end_message = f"❌ <b>训练进程出错</b>\n\n错误信息: {str(e)}"
+            send_telegram_message(end_message)
+            console.print(f"[red]训练进程出错: {str(e)}[/red]")
+        except Exception as e:
+            end_message = f"❌ <b>执行出错</b>\n\n错误信息: {str(e)}"
+            send_telegram_message(end_message)
+            console.print(f"[red]执行出错: {str(e)}[/red]")
+        finally:
+            # 计算训练时间
+            end_time = time.time()
+            duration = format_time_duration(int(end_time - start_time))
             
-            # 如果还没有发送过通知，则在这里发送
-            if not notification_sent:
-                send_telegram_message(end_message)
-        
-        # 确保关闭 wandb
-        if wandb.run is not None:
-            wandb.finish()
+            if process.returncode == 0:
+                # 获取 wandb 运行的 URL
+                wandb_url = wandb.run.get_url() if wandb.run else "未使用 wandb"
+                
+                # 获取最终的训练指标
+                final_metrics = {}
+                end_message = None  # 初始化 end_message
+                notification_sent = False  # 添加通知发送标志
+                
+                try:
+                    if wandb.run:
+                        # 获取训练历史
+                        api = wandb.Api()
+                        run = api.run(f"wyek1n-wye/mlx-finetune/{wandb.run.id}")
+                        
+                        # 等待同步完成
+                        while not run.summary.get("_wandb", {}).get("runtime", 0):
+                            time.sleep(1)
+                        
+                        # 获取历史数据
+                        history = pd.DataFrame(run.scan_history())
+                        
+                        if len(history) > 0:  # 检查是否有历史数据
+                            final_metrics = {
+                                "loss": history["train/loss"].iloc[-1],
+                                "perplexity": math.exp(history["train/loss"].iloc[-1]),
+                                "total_tokens": history["performance/total_tokens"].iloc[-1],
+                                "tokens_per_second": history["performance/tokens_per_second"].mean(),
+                                "peak_memory": history["performance/peak_memory_gb"].max()
+                            }
+                            
+                            # 先执行模型评估
+                            test_cmd = [
+                                "python", "-m", "mlx_lm.lora",
+                                "--model", model_path,
+                                "--data", "/Users/wyek1n/Downloads/Code/MLX/MLX-CLI/lora/data",
+                                "--adapter-path", os.path.join("/Users/wyek1n/Downloads/MLX/adapter", selected_model),  # 使用模型名称作为适配器目录
+                                "--test"
+                            ]
+                            
+                            try:
+                                test_output = subprocess.check_output(test_cmd, universal_newlines=True)
+                                test_match = re.search(r'Test loss ([0-9.]+),\s*Test ppl ([0-9.]+)', test_output)
+                                if test_match:
+                                    test_loss = float(test_match.group(1))
+                                    test_ppl = float(test_match.group(2).rstrip('.'))
+                                    
+                                    # 显示评估结果
+                                    console.print(f"\n[green]评估结果:[/green]")
+                                    console.print(f"模型: {selected_model}")
+                                    console.print(f"适配器: {selected_model}")  # 使用相同的名称
+                                    console.print(f"测试集损失: {test_loss:.4f}")
+                                    console.print(f"测试集困惑度: {test_ppl:.4f}")
+                                    
+                                    # 更新通知消息，添加评估结果
+                                    end_message = (
+                                        f"✅ <b>模型微调完成</b>\n\n"
+                                        f"模型: {selected_model}\n"
+                                        f"训练时长: {duration}\n"
+                                        f"最终损失: {final_metrics['loss']:.4f}\n"
+                                        f"困惑度: {final_metrics['perplexity']:.4f}\n"
+                                        f"总处理tokens: {final_metrics['total_tokens']:,}\n"
+                                        f"平均速度: {final_metrics['tokens_per_second']:.2f} tokens/s\n"
+                                        f"峰值内存: {final_metrics['peak_memory']:.2f} GB\n\n"
+                                        f"评估结果:\n"
+                                        f"模型: {selected_model}\n"
+                                        f"适配器: {selected_model}\n"  # 使用相同的名称
+                                        f"测试集损失: {test_loss:.4f}\n"
+                                        f"测试集困惑度: {test_ppl:.4f}\n\n"
+                                        f"Wandb 地址: {wandb_url}"
+                                    )
+                                    
+                                    # 设置 matplotlib 使用非交互式后端
+                                    plt.switch_backend('Agg')
+                                    
+                                    # 创建图表
+                                    plt.figure(figsize=(12, 8))
+                                    plt.rcParams.update({
+                                        'font.size': 12,
+                                        'axes.titlesize': 16,
+                                        'axes.labelsize': 12,
+                                        'axes.spines.top': False,
+                                        'axes.spines.right': False,
+                                        'axes.grid': True,
+                                        'grid.alpha': 0.3,
+                                        'grid.color': '#b0b0b0'
+                                    })
+                                    
+                                    # 绘制训练损失
+                                    train_loss = history["train/loss"].values
+                                    iterations = np.arange(len(train_loss)) * 10
+                                    window_size = 10
+                                    smoothed_train_loss = pd.Series(train_loss).rolling(window=window_size, min_periods=1, center=True).mean()
+                                    plt.plot(iterations, smoothed_train_loss, color='#1f77b4', linewidth=2, label='Training Loss')
+                                    
+                                    # 绘制验证损失
+                                    if "val/loss" in history.columns:
+                                        val_loss = history["val/loss"].values
+                                        val_indices = history.index[history["val/loss"].notna()].values * 10
+                                        val_loss_clean = val_loss[~np.isnan(val_loss)]
+                                        plt.plot(val_indices, val_loss_clean, color='#ff7f0e', linewidth=2, label='Validation Loss')
+                                    
+                                    plt.title('Training and Validation Loss', pad=20, fontweight='bold')
+                                    plt.xlabel('Iteration')
+                                    plt.ylabel('Loss')
+                                    plt.legend(frameon=False, loc='upper right', fontsize=12)
+                                    plt.tight_layout()
+                                    
+                                    # 保存图表
+                                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                                    loss_plot_path = os.path.join(script_dir, "loss_plot.png")
+                                    plt.savefig(loss_plot_path, dpi=300, bbox_inches='tight')
+                                    plt.close()
+                                    
+                                    # 发送通知和图片
+                                    if os.path.exists(loss_plot_path):
+                                        send_telegram_message(end_message)
+                                        send_telegram_message("", loss_plot_path)
+                                        notification_sent = True  # 标记通知已发送
+                                        os.remove(loss_plot_path)  # 清理临时文件
+                                else:
+                                    console.print("[red]无法解析评估结果[/red]")
+                                    console.print(f"原始输出: {test_output}")
+                            except Exception as e:
+                                log.error(f"模型评估失败: {str(e)}")
+                                console.print(f"[red]评估失败: {str(e)}[/red]")
+                            else:
+                                log.warning("未找到训练历史数据")
+                                end_message = (
+                                    f"✅ <b>模型微调完成</b>\n\n"
+                                    f"模型: {selected_model}\n"
+                                    f"训练时长: {duration}\n"
+                                    f"Wandb 地址: {wandb_url}"
+                                )
+                            
+                            # 完成后再关闭 wandb
+                            wandb.finish()
+                except Exception as e:
+                    log.error(f"获取训练指标失败: {str(e)}")
+                    import traceback
+                    log.error(f"详细错误: {traceback.format_exc()}")
+                    final_metrics = {}
+                    end_message = (
+                        f"✅ <b>模型微调完成</b>\n\n"
+                        f"模型: {selected_model}\n"
+                        f"训练时长: {duration}\n"
+                        f"Wandb 地址: {wandb_url}"
+                    )
+                
+                # 如果还没有发送过通知，则在这里发送
+                if not notification_sent:
+                    send_telegram_message(end_message)
+            
+            # 确保关闭 wandb
+            if wandb.run is not None:
+                wandb.finish()
+
+        # 添加训练失败的检查
+        if "nan" in test_output.lower():
+            log.error("训练过程出现数值不稳定")
+            console.print("[red]训练失败：出现数值不稳定(NaN)，请尝试降低学习率或检查数据[/red]")
+            return
+            
+    except Exception as e:
+        console.print(f"[red]出现错误: {str(e)}[/red]")
+        return
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
@@ -1840,7 +2030,14 @@ def main(ctx: typer.Context):
         check_env_vars()
         check_environment()
         
+        # 初始化配置
+        config = Config()
         global show_logs, rich_handler
+        
+        # 从配置文件加载日志显示状态
+        show_logs = config.get("show_logs", False)
+        rich_handler.enabled = show_logs
+        
         while True:
             choice = show_menu()
             
@@ -1850,19 +2047,51 @@ def main(ctx: typer.Context):
             elif choice == 1:
                 download_model()
             elif choice == 2:
-                prepare_data()
-            elif choice == 3:
-                fine_tune()
-            elif choice == 4:
-                merge_model()
-            elif choice == 5:
-                evaluate_model()
-            elif choice == 6:
                 chat_with_model()
-            elif choice == 7:
+            elif choice == 3:
+                prepare_data()
+            elif choice == 4:
+                fine_tune()
+            elif choice == 5:
+                merge_model()
+            elif choice == 6:
                 show_logs = not show_logs
                 rich_handler.enabled = show_logs
+                config.set("show_logs", show_logs)
                 console.print(f"[green]已{'隐藏' if not show_logs else '显示'}日志[/green]")
+
+class Config:
+    """配置管理类"""
+    def __init__(self):
+        self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        self.config = self.load_config()
+    
+    def load_config(self):
+        """加载配置"""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                log.error(f"加载配置文件失败: {str(e)}")
+        return {"show_logs": False}  # 默认配置
+    
+    def save_config(self):
+        """保存配置"""
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(self.config, f, indent=4)
+        except Exception as e:
+            log.error(f"保存配置文件失败: {str(e)}")
+    
+    def get(self, key, default=None):
+        """获取配置项"""
+        return self.config.get(key, default)
+    
+    def set(self, key, value):
+        """设置配置项"""
+        self.config[key] = value
+        self.save_config()
 
 if __name__ == "__main__":
     app()
