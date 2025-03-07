@@ -693,6 +693,7 @@ def download_from_modelscope(dataset_name: str) -> None:
         "modelscope",
         "download",
         "--dataset", dataset_name,
+        "--token", MODELSCOPE_TOKEN
     ]
     
     try:
@@ -825,9 +826,11 @@ def download_dataset_from_huggingface(dataset_name: str, max_retries: int = 3) -
     dataset_dir = os.path.join(BASE_DATASET_DIR, dataset_name.split('/')[-1])
     cmd = [
         "huggingface-cli", "download",
-        dataset_name,
         "--repo-type", "dataset",
+        "--resume-download",
+        dataset_name,
         "--local-dir", dataset_dir,
+        "--local-dir-use-symlinks", "False",
         "--token", HUGGINGFACE_TOKEN
     ]
     
