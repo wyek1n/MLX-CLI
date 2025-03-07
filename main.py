@@ -708,12 +708,12 @@ def download_from_modelscope(dataset_name: str) -> None:
             transient=True
         ) as progress:
             task = progress.add_task(f"[yellow]从 ModelScope 下载数据集: {dataset_name}", total=None)
-            result = subprocess.run(cmd, check=True, capture_output=True)
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)  # 添加 text=True
             progress.update(task, completed=100)
             
         console.print(f"\n[green]数据集已成功下载到: {dataset_dir}[/green]")
     except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.decode('utf-8') if e.stderr else str(e)
+        error_msg = e.stderr if e.stderr else str(e)  # 直接使用错误信息，不需要 decode
         console.print(f"\n[red]下载失败: {error_msg}[/red]")
 
 def download_from_huggingface(model_name: str) -> None:
